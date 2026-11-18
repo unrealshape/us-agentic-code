@@ -133,7 +133,7 @@ describe("ClaudeRunner", () => {
   });
 
   test("Windows-Pfade bleiben in den Permission-Regeln erhalten (Laufwerk, Slashes)", () => {
-    const winSpec = { ...spec, cwd: "C:\\Users\\jok\\proj" };
+    const winSpec = { ...spec, cwd: "C:\\Users\\dev\\proj" };
     const s = buildSettings(winSpec, false) as any;
     expect(s.permissions.allow).toContain("Edit(//C:/Users/dev/proj/**)");
     expect(s.permissions.allow).toContain("Write(//C:/Users/dev/proj/**)");
