@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { Finding, Model, Size } from "@usac/shared";
+import { checkAdrRule } from "./adr-check";
 import { git } from "./exec";
 import { Escalate, type PhaseHandler } from "./phases";
 import { reviewerPrompt, securityReviewerPrompt } from "./prompts";
@@ -37,6 +38,11 @@ export function createReviewHandler(): PhaseHandler {
     const triggers = securityTriggers(changed, diff);
     ctx.emit(wi, "review.triggers", { triggers });
 
+    // Regel 6 im Ziel-Projekt: neue Abhaengigkeit ohne ADR ist ein deterministischer high-Befund vor den Sitzen.
+    const adr = ctx.profile.adr;
+    const adrFindings: SeatFinding[] = adr.require_for_dependencies ? checkAdrRule(wi.worktree!, baseRef, adr.dir) : [];
+    if (adr.require_for_dependencies) ctx.emit(wi, "review.adr", { dir: adr.dir, findings: adrFindings });
+
     const seats = reviewSeats(wi.size, triggers);
     const results: { seat: ReviewSeat; model: Model; blocking: boolean; findings: SeatFinding[] }[] = [];
     for (const seat of seats) {
@@ -62,13 +68,17 @@ export function createReviewHandler(): PhaseHandler {
     }
 
     const blocked = results.filter((r) => r.blocking);
-    if (!blocked.length) {
+    if (!blocked.length && !adrFindings.length) {
       ctx.emit(wi, "review.approved", { seats: results.map((r) => ({ role: r.seat.role, reason: r.seat.reason, model: r.model, findings: r.findings.length })) });
       return wi;
     }
+    if (adrFindings.length) ctx.emit(wi, "review.changes_requested", { seat: { role: "adr-check", reason: "rule_6" }, findings: adrFindings });
     for (const r of blocked) ctx.emit(wi, "review.changes_requested", { seat: r.seat, findings: r.findings });
-    // Zurueck zur Implementierung mit den Befunden aller Sitze als Rueckmeldung.
-    const lines = results.flatMap((r) => r.findings.map((f) => `- (${r.seat.role}/${r.seat.reason}) [${f.severity}] ${f.text}`));
+    // Zurueck zur Implementierung mit den ADR-Befunden und den Befunden aller Sitze als Rueckmeldung.
+    const lines = [
+      ...adrFindings.map((f) => `- (adr-check/rule_6) [${f.severity}] ${f.text}`),
+      ...results.flatMap((r) => r.findings.map((f) => `- (${r.seat.role}/${r.seat.reason}) [${f.severity}] ${f.text}`)),
+    ];
     return ctx.save(wi, { phase: "implement", lastFailure: "Review-Befunde:\n" + (lines.join("\n") || "- (ohne Einzelbefund) Aenderungen verlangt") });
   };
 }
