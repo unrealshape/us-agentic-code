@@ -8,6 +8,8 @@ export interface RecordedCall {
   model: string;
   prompt: string;
   cwd: string;
+  env?: Record<string, string>;
+  networkAllow?: string[];
 }
 
 /**
@@ -23,7 +25,7 @@ export class ScriptedRunner implements Runner {
   async run(spec: RunSpec): Promise<RunOutcome> {
     const n = this.counts.get(spec.role) ?? 0;
     this.counts.set(spec.role, n + 1);
-    this.calls.push({ role: spec.role, model: spec.model, prompt: spec.prompt, cwd: spec.cwd });
+    this.calls.push({ role: spec.role, model: spec.model, prompt: spec.prompt, cwd: spec.cwd, env: spec.env, networkAllow: spec.networkAllow });
     const h = this.handlers[spec.role];
     if (!h) return { ok: false, error: `Kein Handler fuer Rolle ${spec.role}` };
     const fn = Array.isArray(h) ? h[Math.min(n, h.length - 1)]! : h;

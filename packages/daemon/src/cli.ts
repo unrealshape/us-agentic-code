@@ -10,10 +10,15 @@ import { excludeFromGit, hasGraphify, updateGraph } from "./graph";
 import { createOrchestrator } from "./orchestrator";
 import "./registry-setup";
 import { ClaudeRunner } from "./runner/claude";
+import { ensureLeaseSchema } from "./leases";
+import { MAX_PARALLEL, createScheduler } from "./scheduler";
 import { openStore } from "./store";
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
 const HOME = process.env.USAC_HOME ?? join(homedir(), ".usac");
+
+/** Takt der Scheduler-Schleife von `usac daemon` (offene Entscheidung 9 im Plan). */
+const DAEMON_TICK_MS = 1_000;
 
 /** Freigaben, die per --auto automatisch erteilt werden duerfen (H2 nie). */
 const AUTO_ALLOWED = ["h1", "spec"];
@@ -21,12 +26,15 @@ const AUTO_ALLOWED = ["h1", "spec"];
 const HELP = `US-AGENTIC-CODE (usac)
 
   usac init [pfad]                         Projekt einrichten (.usac/project.yaml, Graphify)
-  usac run <bugfix|feature> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,spec]
+  usac run <bugfix|feature> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,spec] [--queue]
                                            --auto spec wirkt nur, wenn die Spec keine offenen Fragen hat
+                                           --queue reiht nur ein; usac daemon fuehrt aus
   usac resume <workitem-id>                Auftrag fortsetzen (z. B. nach Freigabe)
   usac status [workitem-id]                Auftraege und Status
   usac events <workitem-id> [--since n]    Event-Log eines Auftrags
   usac approve <freigabe-id> [--deny] [--note text]
+  usac daemon [--parallel 3]               Scheduler-Schleife: wartende Auftraege starten (Takt 1 s)
+  usac leases                              Datei-Leases (Pfad, Halter, Alter)
   usac doctor                              Werkzeuge und Voraussetzungen pruefen
   usac ui [--port 7777]                    UI (Inbox, Agent-Wand, Run-Detail) auf 127.0.0.1 starten
 `;
@@ -92,6 +100,7 @@ async function main() {
           size: { type: "string", default: "small" },
           project: { type: "string", default: "." },
           auto: { type: "string", default: "" },
+          queue: { type: "boolean", default: false },
         },
       });
       const type = (positionals[0] ?? "bugfix") as WorkItemType;
@@ -101,7 +110,7 @@ async function main() {
       if (auto.includes("h2")) throw new Error("--auto h2 ist nicht erlaubt: Die Freigabe H2 vor dem Merge erteilt immer ein Mensch (usac approve).");
       const unknown = auto.filter((a) => !AUTO_ALLOWED.includes(a));
       if (unknown.length) throw new Error(`--auto erlaubt nur ${AUTO_ALLOWED.join(", ")} (unbekannt: ${unknown.join(", ")})`);
-      const { orch } = orchestrator(auto);
+      const { store, orch } = orchestrator(auto);
       const wi = await orch.submit({
         projectPath: resolve(values.project!),
         type,
@@ -110,6 +119,11 @@ async function main() {
         size: values.size as Size,
       });
       console.log(`Auftrag ${wi.id} angelegt.`);
+      if (values.queue) {
+        store.append({ traceId: wi.id, spanId: wi.id, parentSpanId: null, project: basename(wi.projectPath), type: "workitem.queued", actor: "orchestrator", data: { reason: "cli" } });
+        console.log(`Auftrag ${wi.id}: queued (startet mit usac daemon)`);
+        break;
+      }
       printResult(await orch.run(wi.id), wi.id);
       break;
     }
@@ -158,7 +172,56 @@ async function main() {
       });
       const { orch } = orchestrator();
       const wiId = orch.approve(Number(positionals[0]), !values.deny, values.note);
-      console.log(`Freigabe ${positionals[0]} ${values.deny ? "abgelehnt" : "erteilt"}. Weiter mit: usac resume ${wiId}`);
+      console.log(`Freigabe ${positionals[0]} ${values.deny ? "abgelehnt" : "erteilt"}. Weiter mit: usac resume ${wiId} (oder laufender usac daemon)`);
+      break;
+    }
+    case "daemon": {
+      const { values } = parseArgs({ args: rest, options: { parallel: { type: "string", default: String(MAX_PARALLEL) } } });
+      const max = Number(values.parallel);
+      if (!Number.isInteger(max) || max < 1) throw new Error(`--parallel braucht eine ganze Zahl >= 1 (war: ${values.parallel})`);
+      const { store, orch } = orchestrator();
+      const sched = createScheduler({ store, run: (id) => orch.run(id, { slotHeld: true }), maxParallel: max });
+      let stopping = false;
+      let busy = false;
+      const loop = setInterval(async () => {
+        if (stopping || busy) return;
+        busy = true;
+        try {
+          for (const id of await sched.tick()) console.log(`Auftrag ${id} gestartet`);
+        } catch (err) {
+          console.error(`Takt fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          busy = false;
+        }
+      }, DAEMON_TICK_MS);
+      // Erstes Ctrl+C: keine neuen Auftraege, laufende zu Ende fuehren. Zweites: sofort beenden.
+      process.on("SIGINT", async () => {
+        if (stopping) process.exit(130);
+        stopping = true;
+        clearInterval(loop);
+        console.log("Daemon stoppt; warte auf laufende Auftraege (erneut Ctrl+C bricht ab).");
+        await sched.idle();
+        process.exit(0);
+      });
+      console.log(`Daemon läuft (bis zu ${max} parallel, Takt ${DAEMON_TICK_MS} ms). Beenden mit Ctrl+C.`);
+      break;
+    }
+    case "leases": {
+      const { store } = orchestrator();
+      ensureLeaseSchema(store);
+      const rows = store.db
+        .query("SELECT project, path, work_item_id, acquired_at FROM leases ORDER BY project, path")
+        .all() as { project: string; path: string; work_item_id: string; acquired_at: number }[];
+      if (!rows.length) {
+        console.log("Keine Leases.");
+        break;
+      }
+      const now = Date.now();
+      console.log(`${"Pfad".padEnd(40)} ${"Halter".padEnd(24)} Alter`);
+      for (const r of rows) {
+        const age = Math.max(0, Math.round((now - r.acquired_at) / 1000));
+        console.log(`${`${basename(r.project)}:${r.path}`.padEnd(40)} ${r.work_item_id.padEnd(24)} ${age} s`);
+      }
       break;
     }
     case "doctor": {

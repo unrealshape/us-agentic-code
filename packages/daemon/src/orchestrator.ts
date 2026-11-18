@@ -20,10 +20,15 @@ import { validateClaims, validateFindings, type EvidenceError } from "./evidence
 import { runAcceptance, runStages, summarize } from "./gates";
 import { changedFiles, checkImplementerDiff, hashFiles, revertPaths } from "./integrity";
 import { Escalate, getPhase, missingPhases, registerPhase, type Actor, type PhaseContext, type PhaseLimits } from "./phases";
-import { GRAPH_NOTE, implementerPrompt, reviewerPrompt, rolePrompt, roleSchema, testEngineerPrompt } from "./prompts";
+import { readHookLog } from "./hook-log";
+import { HEARTBEAT_MS, PROJECT_WIDE, acquireLeases, ensureLeaseSchema, heartbeat, leasesOf, normalizeLeasePath, releaseLeases } from "./leases";
+import { GRAPH_NOTE, implementerPrompt, rolePrompt, roleSchema, testEngineerPrompt } from "./prompts";
 import { budgetUsedFraction, DEFAULT_MAX_TOKENS } from "./quota";
+import { createReviewHandler } from "./review";
 import { loadRouting, resolveModel, type RoutingConfig } from "./routing";
+import { validateHosts } from "./runner/claude";
 import type { Runner } from "./runner/types";
+import { MAX_PARALLEL, ensureSlotSchema, releaseSlot, slotHeartbeat, tryAcquireSlot } from "./scheduler";
 import type { GateResult, Store, WorkItem } from "./store";
 import { loadWorkflow, type PhaseSpec, type Workflow } from "./workflow";
 
@@ -71,6 +76,17 @@ export interface SubmitInput {
   title: string;
   description: string;
   size?: Size;
+}
+
+/** Rollen, fuer die GateGuard aktiv ist (nie Bash, siehe hooks/scripts/gateguard.ts). */
+const GATEGUARD_ROLES = new Set<string>(["implementer", "build-fixer"]);
+
+/** Endzustaende, in denen ein Auftrag seine Leases abgibt. */
+const FINAL_STATUSES = new Set<WorkItem["status"]>(["done", "failed", "escalated"]);
+
+export interface RunOptions {
+  /** Der Scheduler hat den Slot schon vergeben (tryAcquireSlot); run() holt dann keinen eigenen. */
+  slotHeld?: boolean;
 }
 
 export interface RunResult {
@@ -234,7 +250,16 @@ registerPhase("approve_h1", async (wi, ctx) => {
 });
 
 registerPhase("lock", async (wi, ctx) => {
-  const files = st(ctx, wi).acceptanceFiles!;
+  const s = st(ctx, wi);
+  const files = s.acceptanceFiles!;
+  // feature: geplante Dateien plus Abnahmetests; bugfix hat keinen Plan und sperrt das Projekt.
+  const wanted = s.slices ? [...new Set([...s.slices.flatMap((x) => x.files), ...files])] : [PROJECT_WIDE];
+  const got = acquireLeases(ctx.store, wi.projectPath, wi.id, wanted, Date.now());
+  if (!got.ok) {
+    ctx.emit(wi, "lease.wait", { conflicts: got.conflicts });
+    return ctx.save(wi, {}, { status: "queued" });
+  }
+  ctx.emit(wi, "lease.acquired", { paths: wanted.map(normalizeLeasePath) });
   const hash = hashFiles(wi.worktree!, files);
   ctx.store.saveLock(wi.id, files, hash);
   await git(wi.worktree!, "add", "--", ...files);
@@ -267,6 +292,8 @@ registerPhase("implement", async (wi, ctx) => {
       await revertPaths(wi.worktree!, s.baseRef!, lockInfo.files);
       failure = (failure ? failure + "\n" : "") + "Gesperrter Abnahmetest wurde veraendert und zurueckgesetzt.";
     }
+    const busy = await enforceLeases(wi, ctx, s.baseRef!);
+    if (busy) failure = (failure ? failure + "\n" : "") + busy;
 
     if (!failure) {
       const stages = await runStages(ctx.store, wi.id, gp, wi.worktree!, 2);
@@ -297,33 +324,8 @@ registerPhase("implement", async (wi, ctx) => {
   throw new Escalate(`Implementierung nach ${ctx.limits.implementAttempts} Versuchen nicht gruen`);
 });
 
-registerPhase("review", async (wi, ctx) => {
-  let feedback: string | undefined;
-  for (let attempt = 1; attempt <= ctx.limits.reviewAttempts; attempt++) {
-    // Reviewer sieht nur den Diff gegen den gesperrten Stand.
-    const s = st(ctx, wi);
-    await git(wi.worktree!, "add", "-A");
-    const diff = await git(wi.worktree!, "diff", "--cached", s.baseRef!);
-    const route = resolveModel(ctx.routing, "code-reviewer", { size: wi.size, budgetUsed: ctx.budgetUsed(), available: ctx.available });
-    const res = await ctx.runRole(wi, "code-reviewer", route.model, reviewerPrompt(wi, diff, feedback));
-    if (!res.ok) {
-      feedback = res.feedback;
-      continue;
-    }
-    const blocking = res.output.findings.filter((f) => f.severity === "critical" || f.severity === "high");
-    if (res.output.verdict === "approve" && blocking.length === 0) {
-      ctx.emit(wi, "review.approved", { model: route.model, findings: res.output.findings.length });
-      return wi;
-    }
-    ctx.emit(wi, "review.changes_requested", { findings: res.output.findings });
-    // Zurueck zur Implementierung mit den Befunden als Rueckmeldung.
-    return ctx.save(wi, {
-      phase: "implement",
-      lastFailure: "Review-Befunde:\n" + res.output.findings.map((f) => `- [${f.severity}] ${f.text}`).join("\n"),
-    });
-  }
-  throw new Escalate("Review lieferte keine gueltige Ausgabe");
-});
+// Review mit einem oder zwei Sitzen (review.ts, ADR 0004); ersetzt den frueheren eingebauten Handler.
+registerPhase("review", createReviewHandler());
 
 registerPhase("integrate", async (wi, ctx) => {
   await git(wi.worktree!, "add", "-A");
@@ -337,6 +339,33 @@ registerPhase("integrate", async (wi, ctx) => {
   return wi;
 });
 
+/**
+ * Geaenderte Dateien ausserhalb der eigenen Leases: freie Pfade werden nachtraeglich genommen
+ * (`lease.extended`), von anderen gehaltene zurueckgesetzt. Liefert die Rueckmeldung oder null.
+ */
+async function enforceLeases(wi: WorkItem, ctx: PhaseContext, baseRef: string): Promise<string | null> {
+  const own = new Set(leasesOf(ctx.store, wi.id));
+  if (own.has(PROJECT_WIDE)) return null;
+  const busy: string[] = [];
+  const lines: string[] = [];
+  for (const raw of await changedFiles(wi.worktree!, baseRef)) {
+    const p = normalizeLeasePath(raw);
+    if (own.has(p)) continue;
+    const r = acquireLeases(ctx.store, wi.projectPath, wi.id, [p], Date.now());
+    if (r.ok) {
+      own.add(p);
+      ctx.emit(wi, "lease.extended", { path: p });
+    } else {
+      busy.push(raw);
+      lines.push(`Datei ${p} ist von ${r.conflicts[0]!.holder} belegt`);
+    }
+  }
+  if (!busy.length) return null;
+  await revertPaths(wi.worktree!, baseRef, busy);
+  ctx.emit(wi, "lease.conflict", { paths: busy });
+  return lines.join("\n");
+}
+
 function gateEvents(ctx: PhaseContext, wi: WorkItem, results: GateResult[]) {
   for (const r of results) ctx.emit(wi, `gate.${r.status}`, { gate_result_id: r.id, name: r.name, exitCode: r.exitCode, durationMs: r.durationMs });
 }
@@ -348,6 +377,8 @@ export function createOrchestrator(opts: OrchestratorOptions) {
   const limits: Limits = { ...DEFAULT_LIMITS, ...opts.limits };
   const routing: RoutingConfig = loadRouting(pluginRoot);
   const auto = new Set(opts.approvals?.auto ?? []);
+  ensureLeaseSchema(store);
+  ensureSlotSchema(store);
   const budgetUsed =
     opts.budgetUsed ??
     (() =>
@@ -384,6 +415,12 @@ export function createOrchestrator(opts: OrchestratorOptions) {
     prompt: string,
   ): Promise<{ ok: true; output: z.infer<(typeof ROLE_OUTPUTS)[R]> } | { ok: false; feedback: string }> {
     const spanId = `run_${randomBytes(5).toString("hex")}`;
+    const profile = loadProjectProfile(wi.projectPath);
+    const gp = loadGateProfile(pluginRoot, profile.gate_profile);
+    const hookLog = join(home, "hooklogs", `${spanId}.jsonl`);
+    const env: Record<string, string> = { USAC_HOOK_LOG: hookLog, USAC_PROTECTOR_MODE: profile.protector.mode, USAC_WORK_ITEM: wi.id };
+    if (GATEGUARD_ROLES.has(role) && profile.gateguard.enabled) env.USAC_GATEGUARD = "1";
+    const networkAllow = validateHosts([...new Set([...gp.network_allow, ...profile.network.allow])]);
     emit(wi, "run.started", { role, model }, spanId, `role:${role}`);
     const withGraph = existsSync(join(wi.worktree!, "graphify-out/graph.json")) ? `${prompt}\n\n${GRAPH_NOTE}` : prompt;
     const budget = new ContextBudget();
@@ -397,6 +434,8 @@ export function createOrchestrator(opts: OrchestratorOptions) {
         schema: roleSchema(pluginRoot, role),
         maxTurns: limits.maxTurns,
         timeoutMs: limits.runTimeoutMs,
+        env,
+        networkAllow,
       },
       (e) => {
         if (e.kind === "usage" && e.context !== undefined) {
@@ -416,6 +455,7 @@ export function createOrchestrator(opts: OrchestratorOptions) {
       spanId,
       `role:${role}`,
     );
+    hookEvents(wi, role, spanId, hookLog);
     if (!outcome.ok) return { ok: false, feedback: `Die Session ist fehlgeschlagen: ${outcome.error}` };
 
     const parsed = ROLE_OUTPUTS[role].safeParse(outcome.output);
@@ -431,6 +471,16 @@ export function createOrchestrator(opts: OrchestratorOptions) {
       return { ok: false, feedback: `Belege ungueltig:\n${errors.map((e) => `- "${e.claim}": ${e.problem}`).join("\n")}` };
     }
     return { ok: true, output: parsed.data as z.infer<(typeof ROLE_OUTPUTS)[R]> };
+  }
+
+  /** Hook-Log einer Session als Events; jede `reported`-Zeile wird eine nicht blockierende Freigabe `protector`. */
+  function hookEvents(wi: WorkItem, role: string, spanId: string, path: string) {
+    for (const { hook, action, ...rest } of readHookLog(path)) {
+      emit(wi, `${hook}.${action}`, { role, ...rest }, spanId, `role:${role}`);
+      if (action !== "reported") continue;
+      const a = store.createApproval(wi.id, "protector", { role, hook, span: spanId, ...rest });
+      emit(wi, "approval.requested", { approval_id: a.id, kind: "protector", blocking: false }, spanId, `role:${role}`);
+    }
   }
 
   async function commit(cwd: string, message: string) {
@@ -488,15 +538,34 @@ export function createOrchestrator(opts: OrchestratorOptions) {
       return wi;
     },
 
-    async run(id: string): Promise<RunResult> {
+    async run(id: string, runOpts: RunOptions = {}): Promise<RunResult> {
       let wi = store.getWorkItem(id);
       if (!wi) throw new Error(`WorkItem ${id} nicht gefunden`);
       if (wi.status === "done" || wi.status === "escalated") return { status: wi.status, branch: wi.branch };
-      store.updateWorkItem(id, { status: "running" });
+      if (runOpts.slotHeld) {
+        store.updateWorkItem(id, { status: "running" });
+      } else {
+        // Ein belegter Slot heisst: ein anderer Lauf (z. B. der Daemon) fuehrt den Auftrag gerade aus.
+        if (store.db.query("SELECT 1 FROM slots WHERE work_item_id = ?").get(id)) {
+          return { status: wi.status, branch: wi.branch, reason: "Auftrag laeuft bereits (Slot belegt)" };
+        }
+        if (wi.status !== "queued") store.updateWorkItem(id, { status: "queued" });
+        if (!tryAcquireSlot(store, id, MAX_PARALLEL, Date.now())) {
+          wi = store.getWorkItem(id)!;
+          emit(wi, "slot.wait", { max: MAX_PARALLEL });
+          return { status: "queued", branch: wi.branch };
+        }
+      }
       wi = store.getWorkItem(id)!;
-      const profile = loadProjectProfile(wi.projectPath);
-      const gp = loadGateProfile(pluginRoot, profile.gate_profile);
+      const timer = setInterval(() => {
+        const t = Date.now();
+        slotHeartbeat(store, id, t);
+        heartbeat(store, id, t);
+      }, HEARTBEAT_MS);
+      (timer as { unref?: () => void }).unref?.();
       try {
+        const profile = loadProjectProfile(wi.projectPath);
+        const gp = loadGateProfile(pluginRoot, profile.gate_profile);
         const workflow = workflowFor(wi.type);
         // Unbekannte Phasen brechen vor dem Start ab, statt still uebersprungen zu werden.
         const missing = missingPhases(workflow);
@@ -517,6 +586,7 @@ export function createOrchestrator(opts: OrchestratorOptions) {
           if (idx < 0) throw new Error(`Phase "${current}" steht nicht im Workflow "${workflow.name}"`);
           wi = await getPhase(current)!(wi, context(workflow.phases[idx]!, workflow, profile, gp));
           if (wi.status === "awaiting_approval") return { status: "awaiting_approval", branch: wi.branch };
+          if (wi.status === "queued") return { status: "queued", branch: wi.branch }; // z. B. lease.wait
           if (wi.status === "done") break;
           if (state(wi).phase !== current) continue; // Sprung, z. B. review -> implement
           const next = workflow.phases[idx + 1];
@@ -535,6 +605,12 @@ export function createOrchestrator(opts: OrchestratorOptions) {
         wi = store.getWorkItem(id)!;
         emit(wi, status === "escalated" ? "workitem.escalated" : "workitem.failed", { reason, phase: state(wi).phase });
         return { status, branch: wi.branch, reason };
+      } finally {
+        clearInterval(timer);
+        releaseSlot(store, id);
+        // Leases bleiben bei awaiting_approval und queued erhalten (offene Entscheidung 2 im Plan).
+        const cur = store.getWorkItem(id);
+        if (cur && FINAL_STATUSES.has(cur.status)) releaseLeases(store, id);
       }
     },
 
@@ -542,6 +618,13 @@ export function createOrchestrator(opts: OrchestratorOptions) {
       const a = store.getApproval(approvalId);
       if (!a) throw new Error(`Freigabe ${approvalId} nicht gefunden`);
       store.resolveApproval(approvalId, granted, note);
+      // Wartender Auftrag geht zurueck in die Queue; der Daemon setzt ihn im naechsten Takt fort.
+      // Freigaben der Art protector blockieren nie und reihen daher nichts ein.
+      const wi = store.getWorkItem(a.workItemId);
+      if (wi && wi.status === "awaiting_approval" && a.kind !== "protector") {
+        store.updateWorkItem(wi.id, { status: "queued" });
+        emit(store.getWorkItem(wi.id)!, "workitem.queued", { reason: "approval", approval_id: approvalId, kind: a.kind });
+      }
       return a.workItemId;
     },
   };
