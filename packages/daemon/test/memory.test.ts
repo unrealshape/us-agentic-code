@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addEntry, exportVerified, openMemory, search, setStatus, verifyEntry } from "../src/memory";
+import { addEntry, exportVerified, memoryUid, openMemory, search, setStatus, verifyEntry } from "../src/memory";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "usac-mem-"));
 const opened: Database[] = [];
@@ -84,7 +84,7 @@ describe("memory", () => {
     expect(exportVerified(db, out)).toBe(2);
     setStatus(db, b, "stale");
     expect(exportVerified(db, out)).toBe(1);
-    expect(readdirSync(out).sort()).toEqual([`rule-${a}.md`, "README.md"].sort());
+    expect(readdirSync(out).sort()).toEqual([`rule-${memoryUid("rule", "eins")}.md`, "README.md"].sort());
   });
 
   test("triviale Zitate und ungueltige lines werden abgelehnt", () => {
