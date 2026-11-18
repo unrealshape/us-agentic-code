@@ -1,8 +1,17 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { z } from "zod";
-import { ROLE_OUTPUTS, type Model, type RoleWithOutput, type Size, type WorkItemType } from "@usac/shared";
+import {
+  ROLE_OUTPUTS,
+  type AcceptanceCriterion,
+  type AnalystOutput,
+  type Model,
+  type RoleWithOutput,
+  type Size,
+  type Slice,
+  type WorkItemType,
+} from "@usac/shared";
 import { loadGateProfile, loadProjectProfile, matchesAny, type GateProfile, type ProjectProfile } from "./config";
 import { ContextBudget } from "./budget";
 import { git } from "./exec";
@@ -80,6 +89,12 @@ type State = {
   lastFailure?: string;
   lastImplModel?: Model;
   reviewFeedback?: string;
+  /** Feature-Workflow (feature-phases.ts): Spec und Slice-Plan. */
+  spec?: AnalystOutput;
+  slices?: Slice[];
+  sliceOrder?: string[];
+  /** Rote Tests je Slice-ID; erledigte Slices werden beim Wiedereintritt uebersprungen. */
+  sliceTests?: Record<string, string[]>;
 };
 
 const st = (ctx: PhaseContext, wi: WorkItem) => ctx.state(wi) as State;
@@ -107,18 +122,38 @@ registerPhase("setup", async (wi, ctx) => {
   return wi;
 });
 
-registerPhase("acceptance", async (wi, ctx) => {
+/** Rot-Pruefung fuer einen Slice (oder ohne Slice den ganzen Auftrag, bugfix). */
+type SliceInput = { slice: Slice; criteria: AcceptanceCriterion[] };
+
+/**
+ * Versuchsschleife des Test Engineers. `earlier` sind die Tests frueherer Slices: sie sind
+ * noch nicht committet, daher sichert der Handler ihren Inhalt vor jedem Versuch und stellt
+ * ihn wieder her, wenn der Test Engineer sie anfasst (das zaehlt als Fehlversuch).
+ */
+async function writeRedTest(wi: WorkItem, ctx: PhaseContext, input?: SliceInput, earlier: string[] = []): Promise<{ files: string[]; gateId: number }> {
   const gp = ctx.gateProfile;
+  const sliceData = input ? { slice: input.slice.id } : {};
   let feedback: string | undefined;
   for (let attempt = 1; attempt <= ctx.limits.acceptanceAttempts; attempt++) {
     const base = await git(wi.worktree!, "rev-parse", "HEAD");
+    const saved = new Map(earlier.map((f) => [f, readFileSync(join(wi.worktree!, f))] as const));
     const route = resolveModel(ctx.routing, "test-engineer", {
       variant: ctx.spec.variant ?? "acceptance",
       size: wi.size,
       budgetUsed: ctx.budgetUsed(),
       available: ctx.available,
     });
-    const res = await ctx.runRole(wi, "test-engineer", route.model, testEngineerPrompt(wi, feedback));
+    const res = await ctx.runRole(wi, "test-engineer", route.model, testEngineerPrompt(wi, feedback, input));
+    // Eigene Aenderungen dieses Versuchs; Tests frueherer Slices bleiben davon ausgenommen.
+    const own = async () => (await changedFiles(wi.worktree!, base)).filter((p) => !saved.has(p));
+    const touched = earlier.filter((f) => !existsSync(join(wi.worktree!, f)) || !readFileSync(join(wi.worktree!, f)).equals(saved.get(f)!));
+    if (touched.length) {
+      for (const f of touched) writeFileSync(join(wi.worktree!, f), saved.get(f)!);
+      await revertPaths(wi.worktree!, base, await own());
+      ctx.emit(wi, "anticheat.violation", { role: "test-engineer", ...sliceData, touched });
+      feedback = `Tests frueherer Slices sind tabu und wurden zurueckgesetzt: ${touched.join(", ")}`;
+      continue;
+    }
     if (!res.ok) {
       feedback = res.feedback;
       continue;
@@ -129,22 +164,50 @@ registerPhase("acceptance", async (wi, ctx) => {
     const missing = files.filter((f) => !existsSync(join(wi.worktree!, f)) || !matchesAny(f, gp.test_globs));
     if (nonTest.length || missing.length) {
       if (nonTest.length) await revertPaths(wi.worktree!, base, nonTest);
-      ctx.emit(wi, "anticheat.violation", { role: "test-engineer", nonTest, missing });
+      ctx.emit(wi, "anticheat.violation", { role: "test-engineer", ...sliceData, nonTest, missing });
       feedback = `Nur Testdateien sind erlaubt. Verworfen: ${nonTest.join(", ") || "-"}. Fehlende oder ungueltige Testpfade: ${missing.join(", ") || "-"}`;
       continue;
     }
     const gate = await runAcceptance(ctx.store, wi.id, gp, wi.worktree!, files);
     gateEvents(ctx, wi, [gate]);
     if (gate.status === "passed") {
-      ctx.emit(wi, "acceptance.rejected", { reason: "Abnahmetest ist ohne Aenderung schon gruen und beweist nichts", files });
-      await revertPaths(wi.worktree!, base, await changedFiles(wi.worktree!, base));
+      ctx.emit(wi, "acceptance.rejected", { reason: "Abnahmetest ist ohne Aenderung schon gruen und beweist nichts", ...sliceData, files });
+      await revertPaths(wi.worktree!, base, await own());
       feedback = "Dein Abnahmetest war sofort gruen. Er muss das fehlende Verhalten beweisen und daher mit dem aktuellen Code rot sein.";
       continue;
     }
-    ctx.emit(wi, "acceptance.red", { gate_result_id: gate.id, files });
+    ctx.emit(wi, "acceptance.red", { ...sliceData, gate_result_id: gate.id, files });
+    return { files, gateId: gate.id };
+  }
+  throw new Escalate(
+    "Kein brauchbarer Abnahmetest" + (input ? ` fuer Slice ${input.slice.id}` : "") + " nach " + ctx.limits.acceptanceAttempts + " Versuchen",
+  );
+}
+
+/** Vereinigung der Slice-Tests in sliceOrder-Reihenfolge, ohne Duplikate. */
+function unionSliceTests(order: string[], tests: Record<string, string[]>): string[] {
+  return [...new Set(order.flatMap((id) => tests[id] ?? []))];
+}
+
+registerPhase("acceptance", async (wi, ctx) => {
+  const s = st(ctx, wi);
+  if (!s.slices) {
+    const { files } = await writeRedTest(wi, ctx);
     return ctx.save(wi, { acceptanceFiles: files });
   }
-  throw new Escalate("Kein brauchbarer Abnahmetest nach " + ctx.limits.acceptanceAttempts + " Versuchen");
+  const order = s.sliceOrder ?? s.slices.map((x) => x.id);
+  const sliceTests: Record<string, string[]> = { ...s.sliceTests };
+  for (const id of order) {
+    if (sliceTests[id]) continue; // Resume: Slice hat schon einen roten Test
+    const slice = s.slices.find((x) => x.id === id);
+    if (!slice) throw new Error(`Slice ${id} aus sliceOrder fehlt im Plan`);
+    const criteria = (s.spec?.criteria ?? []).filter((c) => slice.criteria.includes(c.id));
+    const earlier = unionSliceTests(order, sliceTests);
+    const { files } = await writeRedTest(wi, ctx, { slice, criteria }, earlier);
+    sliceTests[id] = files;
+    wi = ctx.save(wi, { sliceTests: { ...sliceTests } });
+  }
+  return ctx.save(wi, { sliceTests, acceptanceFiles: unionSliceTests(order, sliceTests) });
 });
 
 registerPhase("approve_h1", async (wi, ctx) => {
@@ -203,11 +266,23 @@ registerPhase("implement", async (wi, ctx) => {
 
     if (!failure) {
       const stages = await runStages(ctx.store, wi.id, gp, wi.worktree!, 2);
-      const acc = await runAcceptance(ctx.store, wi.id, gp, wi.worktree!, lockInfo.files);
-      const all = summarize([...stages.results, acc]);
+      // Mit Slices: je Slice ein eigener Abnahmelauf nur mit dessen Tests; alle muessen gruen sein.
+      const groups: { slice?: string; files: string[] }[] = s.slices
+        ? (s.sliceOrder ?? s.slices.map((x) => x.id)).map((id) => ({ slice: id, files: s.sliceTests?.[id] ?? [] }))
+        : [{ files: lockInfo.files }];
+      const accs: GateResult[] = [];
+      for (const g of groups) accs.push(await runAcceptance(ctx.store, wi.id, gp, wi.worktree!, g.files));
+      const all = summarize([...stages.results, ...accs]);
       gateEvents(ctx, wi, all.results);
       if (all.passed) {
-        ctx.emit(wi, "acceptance.green", { gate_result_id: acc.id, model: route.model, attempt: failures + 1 });
+        groups.forEach((g, i) =>
+          ctx.emit(wi, "acceptance.green", {
+            ...(g.slice ? { slice: g.slice } : {}),
+            gate_result_id: accs[i]!.id,
+            model: route.model,
+            attempt: failures + 1,
+          }),
+        );
         return ctx.save(wi, { lastFailure: undefined, lastImplModel: route.model });
       }
       failure = all.failureOutput;
