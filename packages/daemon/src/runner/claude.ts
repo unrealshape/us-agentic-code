@@ -25,11 +25,34 @@ export function toRulePath(cwd: string): string {
   return `//${normalized}`;
 }
 
-/** Erzeugt die Settings-Datei je Run: Sandbox fuer Bash, Schreibrechte nur im Worktree. */
+/**
+ * Pfad der Domain-Allowlist im Settings-Objekt.
+ * Beleg: https://code.claude.com/docs/en/sandboxing (sandbox.network.allowedDomains), siehe ADR 0005.
+ */
+export const NETWORK_KEY_PATH: string[] = ["sandbox", "network", "allowedDomains"];
+
+const HOST_PATTERN = /^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+/** Prueft Hosts fuer die Allowlist; nur Domainnamen, optional mit fuehrendem "*.". */
+export function validateHosts(hosts: string[]): string[] {
+  for (const h of hosts) {
+    if (!HOST_PATTERN.test(h)) throw new Error(`Ungültiger Host in network.allow: ${h}`);
+  }
+  return [...hosts];
+}
+
+/** Umgebung fuer den claude-Kindprozess: Basis (process.env) plus spec.env, spec.env gewinnt. */
+export function buildEnv(spec: RunSpec, base: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+  return { ...base, ...(spec.env ?? {}) };
+}
+
+/** Erzeugt die Settings-Datei je Run: Sandbox fuer Bash, Netz nur per Allowlist, Schreibrechte nur im Worktree. */
 export function buildSettings(spec: RunSpec, sandbox: boolean): object {
   const root = toRulePath(spec.cwd);
+  // strictAllowlist: Hosts ausserhalb der Liste ablehnen statt nachfragen (headless gibt es niemanden, der antwortet).
+  const network = { allowedDomains: validateHosts(spec.networkAllow ?? []), strictAllowlist: true };
   return {
-    sandbox: sandbox ? { enabled: true, autoAllowBashIfSandboxed: true } : { enabled: false },
+    sandbox: sandbox ? { enabled: true, autoAllowBashIfSandboxed: true, network } : { enabled: false, network },
     permissions: {
       allow: [`Edit(${root}/**)`, `Write(${root}/**)`],
       deny: ["Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Write(**/.env)"],
@@ -64,7 +87,7 @@ export class ClaudeRunner implements Runner {
       cwd: spec.cwd,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: buildEnv(spec),
     });
 
     let turns = 0;

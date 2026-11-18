@@ -11,6 +11,9 @@ protected_globs: [".luacheckrc", ".busted", ".stylua.toml", "stylua.toml", ".lua
 # Marker, mit denen Tests uebersprungen wuerden.
 skip_markers: ["pending(", "luacheck: ignore", "luacheck: push ignore"]
 
+# Hosts, die Bash-Befehle in der Sandbox erreichen duerfen (LuaRocks); siehe ADR 0005.
+network_allow: ["luarocks.org"]
+
 acceptance:
   run: "busted --output=TAP {files}"
 

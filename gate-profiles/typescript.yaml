@@ -5,6 +5,9 @@ test_globs: ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "tests/**", "test/
 protected_globs: ["tsconfig.json", "biome.json", ".eslintrc*", "eslint.config.*", "vitest.config.*", ".usac/**", ".github/**"]
 skip_markers: [".skip(", ".only(", "xit(", "xdescribe(", "@ts-ignore", "@ts-expect-error"]
 
+# Hosts, die Bash-Befehle in der Sandbox erreichen duerfen (npm-Registry); siehe ADR 0005.
+network_allow: ["registry.npmjs.org"]
+
 acceptance:
   run: "bun test {files}"
 

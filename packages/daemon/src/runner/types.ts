@@ -14,6 +14,10 @@ export interface RunSpec {
   timeoutMs?: number;
   /** Harte Grenze fuer Assistant-Turns; der Runner bricht bei Ueberschreitung ab. */
   maxTurns?: number;
+  /** Hosts, die Bash-Befehle in der Sandbox erreichen duerfen (ADR 0005). Leer oder fehlend: kein Netz. */
+  networkAllow?: string[];
+  /** Zusaetzliche Umgebungsvariablen fuer die Session und ihre Hooks (z. B. USAC_HOOK_LOG). */
+  env?: Record<string, string>;
 }
 
 export interface RunOutcome {
