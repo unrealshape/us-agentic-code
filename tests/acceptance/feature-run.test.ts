@@ -5,13 +5,13 @@
  * werden hier per registerPhase durch Test-Handler ersetzt; die echten Handler
  * fuer push/pr/approve_h2/merge kommen mit dem Integrator (Task 5).
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACCEPTANCE_SPEC, FIXED_ROTATION, REPO_ROOT, setupProject, tempHome } from "../helpers";
 import { createOrchestrator } from "../../packages/daemon/src/orchestrator";
-import { registerPhase } from "../../packages/daemon/src/phases";
+import { getPhase, registerPhase, restorePhases, snapshotPhases, type PhaseHandler, type PhaseSnapshot } from "../../packages/daemon/src/phases";
 import { ScriptedRunner, type Handler } from "../../packages/daemon/src/runner/scripted";
 import { openStore, type Store } from "../../packages/daemon/src/store";
 
@@ -66,7 +66,29 @@ function setup() {
   return { project, store, orch };
 }
 
+/** Lauf mit eigener Workflow-Datei in einem temporaeren Plugin-Ordner. */
+function customRun(workflowYaml: string) {
+  const plugin = mkdtempSync(join(tmpdir(), "usac-plugin-"));
+  for (const d of ["agents", "schemas", "gate-profiles", "routing.yaml"]) cpSync(join(REPO_ROOT, d), join(plugin, d), { recursive: true });
+  mkdirSync(join(plugin, "workflows"));
+  writeFileSync(join(plugin, "workflows/bugfix.yaml"), workflowYaml);
+  const project = setupProject();
+  const home = tempHome();
+  const store = openStore(join(home, "usac.db"));
+  const orch = createOrchestrator({ store, runner: new ScriptedRunner({}), pluginRoot: plugin, home, graphify: false });
+  return { project, store, orch };
+}
+
 describe("Slice 3: Orchestrator als Interpreter", () => {
+  // Test-Handler duerfen nicht in andere Testdateien durchsickern.
+  let snapshot: PhaseSnapshot;
+  beforeEach(() => {
+    snapshot = snapshotPhases();
+  });
+  afterEach(() => {
+    restorePhases(snapshot);
+  });
+
   test("feature läuft bis zur Freigabe H2 mit scripted Runner", async () => {
     const { project, store, orch } = setup();
     const wi = await orch.submit({ projectPath: project, type: "feature", title: "Cooldown beachten", description: "x" });
@@ -100,14 +122,7 @@ describe("Slice 3: Orchestrator als Interpreter", () => {
   }, 60_000);
 
   test("unbekannte Phase im Workflow bricht mit klarer Meldung ab", async () => {
-    const plugin = mkdtempSync(join(tmpdir(), "usac-plugin-"));
-    for (const d of ["agents", "schemas", "gate-profiles", "routing.yaml"]) cpSync(join(REPO_ROOT, d), join(plugin, d), { recursive: true });
-    mkdirSync(join(plugin, "workflows"));
-    writeFileSync(join(plugin, "workflows/bugfix.yaml"), "name: bugfix\nphases:\n  - name: setup\n  - name: zaubern\n");
-    const project = setupProject();
-    const home = tempHome();
-    const store = openStore(join(home, "usac.db"));
-    const orch = createOrchestrator({ store, runner: new ScriptedRunner({}), pluginRoot: plugin, home, graphify: false });
+    const { project, store, orch } = customRun("name: bugfix\nphases:\n  - name: setup\n  - name: zaubern\n");
     const wi = await orch.submit({ projectPath: project, type: "bugfix", title: "x", description: "x" });
     const result = await orch.run(wi.id);
 
@@ -116,4 +131,50 @@ describe("Slice 3: Orchestrator als Interpreter", () => {
     // Abbruch vor der ersten Phase, nichts wird still uebersprungen.
     expect(store.events({ traceId: wi.id }).map((e) => e.type)).not.toContain("worktree.created");
   }, 60_000);
+
+  test("Workflow ohne setup am Anfang startet mit seiner ersten Phase", async () => {
+    let calls = 0;
+    // Handler speichert keine Phase; der Orchestrator muss trotzdem weitergehen.
+    registerPhase("vorbereiten", async (wi, ctx) => {
+      await new Promise((r) => setTimeout(r, 0));
+      if (++calls > 5) throw new Error("Notbremse: vorbereiten laeuft endlos");
+      ctx.emit(wi, "test.phase.vorbereiten");
+      return wi;
+    });
+    const { project, store, orch } = customRun("name: bugfix\nphases:\n  - name: vorbereiten\n  - name: setup\n");
+    const wi = await orch.submit({ projectPath: project, type: "bugfix", title: "x", description: "x" });
+    const result = await orch.run(wi.id);
+
+    expect(result.reason).toBeUndefined();
+    expect(result.status).toBe("done");
+    expect(calls).toBe(1);
+    const types = store.events({ traceId: wi.id }).map((e) => e.type);
+    expect(types.indexOf("test.phase.vorbereiten")).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf("worktree.created")).toBeGreaterThan(types.indexOf("test.phase.vorbereiten"));
+  }, 60_000);
+
+  test("Handler, die endlos hin und her springen, brechen an der Schutzgrenze ab", async () => {
+    let calls = 0;
+    const jump = (to: string): PhaseHandler => async (wi, ctx) => {
+      if (++calls > 1000) throw new Error("Notbremse im Test: Orchestrator bricht nicht ab");
+      return ctx.save(wi, { phase: to });
+    };
+    registerPhase("ping", jump("pong"));
+    registerPhase("pong", jump("ping"));
+    const { project, orch } = customRun("name: bugfix\nphases:\n  - name: ping\n  - name: pong\n");
+    const wi = await orch.submit({ projectPath: project, type: "bugfix", title: "x", description: "x" });
+    const result = await orch.run(wi.id);
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("Schutzgrenze");
+  }, 60_000);
+
+  test("Registry wird nach jedem Test zurueckgesetzt", () => {
+    const snap = snapshotPhases();
+    registerPhase("nur_im_test", async (wi) => wi);
+    expect(getPhase("nur_im_test")).toBeDefined();
+    restorePhases(snap);
+    expect(getPhase("nur_im_test")).toBeUndefined();
+    expect(getPhase("setup")).toBeDefined();
+  });
 });

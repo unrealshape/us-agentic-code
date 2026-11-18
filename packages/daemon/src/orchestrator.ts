@@ -50,6 +50,9 @@ const DEFAULT_LIMITS: Limits = {
   runTimeoutMs: 20 * 60_000,
 };
 
+/** Hoechstzahl an Phasenschritten je `run`-Aufruf; schuetzt vor Handlern, die endlos springen. */
+const MAX_PHASE_STEPS = 200;
+
 /** Zeitfenster der Kontingent-Schaetzung (Annahme: Wochenlimit des Abos; siehe Bericht Task 4). */
 const DEFAULT_QUOTA_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
@@ -421,9 +424,14 @@ export function createOrchestrator(opts: OrchestratorOptions) {
             `Workflow "${workflow.name}": kein Handler fuer Phase ${missing.map((n) => `"${n}"`).join(", ")} (registerPhase fehlt)`,
           );
         }
-        for (;;) {
-          const current: string = (wi.state as Partial<State> | null)?.phase ?? workflow.phases[0]!.name;
+        // Startphase kommt aus dem Workflow, nicht aus dem Standardwert von state().
+        if (!(wi.state as Partial<State> | null)?.phase) wi = save(wi, { phase: workflow.phases[0]!.name });
+        for (let steps = 0; ; steps++) {
+          const current: string = state(wi).phase;
           if (current === "done") break;
+          if (steps >= MAX_PHASE_STEPS) {
+            throw new Error(`Schutzgrenze erreicht: ${MAX_PHASE_STEPS} Phasenschritte in einem Lauf (Endlosschleife bei Phase "${current}"?)`);
+          }
           const idx = workflow.phases.findIndex((p) => p.name === current);
           if (idx < 0) throw new Error(`Phase "${current}" steht nicht im Workflow "${workflow.name}"`);
           wi = await getPhase(current)!(wi, context(workflow.phases[idx]!, workflow, profile, gp));

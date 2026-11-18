@@ -73,6 +73,19 @@ export function getPhase(name: string): PhaseHandler | undefined {
   return registry.get(name);
 }
 
+/** Momentaufnahme der Registry, z. B. fuer Tests (beforeEach/afterEach). */
+export type PhaseSnapshot = ReadonlyMap<string, PhaseHandler>;
+
+export function snapshotPhases(): PhaseSnapshot {
+  return new Map(registry);
+}
+
+/** Stellt die Registry exakt auf eine Momentaufnahme zurueck (spaeter registrierte Handler fallen weg). */
+export function restorePhases(snapshot: PhaseSnapshot): void {
+  registry.clear();
+  for (const [name, handler] of snapshot) registry.set(name, handler);
+}
+
 /** Namen aus dem Workflow, fuer die kein Handler registriert ist. */
 export function missingPhases(workflow: Workflow): string[] {
   return workflow.phases.map((p) => p.name).filter((n) => !registry.has(n));
