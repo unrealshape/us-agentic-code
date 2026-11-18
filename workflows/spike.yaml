@@ -1,0 +1,16 @@
+# Spike: Architect recherchiert ohne Codeaenderung und schreibt einen Bericht; Freigabe des Berichts.
+# Ausgefuehrt vom Orchestrator als feste Zustandsmaschine.
+name: spike
+phases:
+  - name: setup            # Worktree + Branch usac/<id>
+  - name: research         # Bericht des Architects (nur lesend)
+    role: architect
+  - name: approve_report   # Freigabe des Berichts
+    approval: report
+  - name: integrate        # Bericht committen
+  - name: push
+  - name: pr
+  - name: approve_h2       # Freigabe vor Merge
+    approval: h2
+  - name: merge
+escalation: default

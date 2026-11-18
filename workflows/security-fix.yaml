@@ -1,0 +1,30 @@
+# Sicherheitsfix: roter Abnahmetest, Fix, Gates 3-6, Security Reviewer, zwei Freigaben.
+# Ausgefuehrt vom Orchestrator als feste Zustandsmaschine.
+name: security-fix
+phases:
+  - name: setup            # Worktree + Branch usac/<id>
+  - name: acceptance       # Abnahmetest muss ROT sein
+    role: test-engineer
+    variant: acceptance
+    expect: gate_fails
+  - name: approve_h1       # Freigabe der Abnahmetests
+    approval: h1
+  - name: lock             # Hash sperren, Test committen
+  - name: implement        # bis Gates 1-2 + Abnahmetest gruen
+    role: implementer
+    until: [format, lint, unit, acceptance]
+    max_attempts: 6
+  - name: verify           # Gate-Stufen 3-6
+  - name: security         # Security Reviewer
+    role: security-reviewer
+    block_on: [critical, high]
+  - name: review           # frischer Kontext, Belegpflicht
+    role: code-reviewer
+    block_on: [critical, high]
+  - name: integrate        # Conventional Commit der Implementierung vor dem Push
+  - name: push
+  - name: pr
+  - name: approve_h2       # Freigabe vor Merge
+    approval: h2
+  - name: merge
+escalation: default

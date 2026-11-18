@@ -7,6 +7,12 @@ const wf = loadWorkflow(join(import.meta.dir, "../../workflows/feature.yaml"));
 describe("Workflow feature", () => {
   test("feature hat Spec, Slice-Planung, rote Slice-Tests, Freigaben und Integrator in dieser Reihenfolge", () => {
     expect(wf.phases.map((p) => p.name)).toEqual([
+      "setup", "spec", "approve_spec", "design", "plan", "acceptance", "approve_h1",
+      "lock", "implement", "qa", "verify", "review", "integrate", "push", "pr", "approve_h2", "merge",
+    ]);
+    // Die bisherige Folge bleibt in gleicher Reihenfolge erhalten (Phase 4 ergaenzt nur design, qa, verify).
+    const added = new Set(["design", "qa", "verify"]);
+    expect(wf.phases.map((p) => p.name).filter((n) => !added.has(n))).toEqual([
       "setup", "spec", "approve_spec", "plan", "acceptance", "approve_h1",
       "lock", "implement", "review", "integrate", "push", "pr", "approve_h2", "merge",
     ]);

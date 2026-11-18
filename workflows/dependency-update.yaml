@@ -1,0 +1,21 @@
+# Abhaengigkeits-Update: Environment Engineer aktualisiert, Gates 3-6 und Security Reviewer pruefen.
+# Ausgefuehrt vom Orchestrator als feste Zustandsmaschine.
+name: dependency-update
+phases:
+  - name: setup            # Worktree + Branch usac/<id>
+  - name: environment      # Abhaengigkeiten aktualisieren (Gates 1-2 gruen)
+    role: environment-engineer
+  - name: verify           # Gate-Stufen 3-6
+  - name: security         # Security Reviewer
+    role: security-reviewer
+    block_on: [critical, high]
+  - name: review           # frischer Kontext, Belegpflicht
+    role: code-reviewer
+    block_on: [critical, high]
+  - name: integrate        # Conventional Commit vor dem Push
+  - name: push
+  - name: pr
+  - name: approve_h2       # Freigabe vor Merge
+    approval: h2
+  - name: merge
+escalation: default

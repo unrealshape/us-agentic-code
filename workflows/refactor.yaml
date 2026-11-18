@@ -1,0 +1,27 @@
+# Refactoring: Verhalten erst mit Charakterisierungstests festhalten (muessen GRUEN sein), dann umbauen.
+# Ausgefuehrt vom Orchestrator als feste Zustandsmaschine.
+name: refactor
+phases:
+  - name: setup            # Worktree + Branch usac/<id>
+  - name: characterize     # Charakterisierungstests muessen GRUEN sein
+    role: test-engineer
+    variant: acceptance
+    expect: gate_passes
+  - name: approve_h1       # Freigabe der Charakterisierungstests
+    approval: h1
+  - name: lock             # Hash sperren, Tests committen
+  - name: implement        # Umbau, Charakterisierung bleibt gruen
+    role: implementer
+    until: [format, lint, unit, acceptance]
+    max_attempts: 6
+  - name: verify           # Gate-Stufen 3-6
+  - name: review           # frischer Kontext, Belegpflicht
+    role: code-reviewer
+    block_on: [critical, high]
+  - name: integrate        # Conventional Commit der Implementierung vor dem Push
+  - name: push
+  - name: pr
+  - name: approve_h2       # Freigabe vor Merge
+    approval: h2
+  - name: merge
+escalation: default

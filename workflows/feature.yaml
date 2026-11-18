@@ -1,5 +1,5 @@
-# Feature-Workflow (Phase 1): Spec, Slice-Planung, rote Slice-Tests, zwei Freigaben.
-# Ausgefuehrt vom Orchestrator als feste Zustandsmaschine.
+# Feature-Workflow: Spec, ggf. Architektur, Slice-Planung, rote Slice-Tests, Gates 3-6, zwei Freigaben.
+# Ausgefuehrt vom Orchestrator als feste Zustandsmaschine; `when` wertet Code aus (activePhases).
 name: feature
 phases:
   - name: setup            # Worktree + Branch usac/<id>
@@ -7,6 +7,11 @@ phases:
     role: analyst
   - name: approve_spec     # Freigabe der Spec
     approval: spec
+  - name: design           # Architektur-Vorschlag + ADR, nur bei grossen Auftraegen
+    role: architect
+    approval: design
+    when:
+      size: [large]
   - name: plan             # Rueckwaerts-Planung in Slices
     role: tech-lead
   - name: acceptance       # Slice-Tests muessen ROT sein
@@ -20,6 +25,11 @@ phases:
     role: implementer
     until: [format, lint, unit, acceptance]
     max_attempts: 6
+  - name: qa               # QA gegen die lokale Preview, nur mit Preview im Profil
+    role: qa-engineer
+    when:
+      preview: true
+  - name: verify           # Gate-Stufen 3-6
   - name: review           # frischer Kontext, Belegpflicht
     role: code-reviewer
     block_on: [critical, high]
