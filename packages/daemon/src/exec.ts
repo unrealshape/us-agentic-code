@@ -7,10 +7,15 @@ export interface ExecResult {
 
 const MAX_OUTPUT = 20_000;
 
-/** Fuehrt einen Shell-Befehl aus und sammelt stdout+stderr (gekuerzt). */
-export async function sh(command: string, cwd: string, timeoutMs = 120_000): Promise<ExecResult> {
+/** Fuehrt einen Shell-Befehl aus und sammelt stdout+stderr (gekuerzt). `env` ergaenzt bzw. ueberschreibt `process.env`. */
+export async function sh(command: string, cwd: string, timeoutMs = 120_000, env?: Record<string, string>): Promise<ExecResult> {
   const started = Date.now();
-  const proc = Bun.spawn(["bash", "-c", command], { cwd, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["bash", "-c", command], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+  });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;

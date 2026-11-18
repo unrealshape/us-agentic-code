@@ -1,0 +1,28 @@
+# Geteilte Gate-Stufe 4 (Sicherheit), eingebunden per `includes: [security]`; Belege in ADR 0009.
+# Alle Gates sind optional: fehlt das Werkzeug (Exit 127), ist das Gate `skipped`,
+# ausser in `security-fix` und `dependency-update` – dort scheitert es.
+# UNGEPRUEFT: Semgrep, gitleaks und Trivy sind auf der Entwicklungsmaschine nicht installiert;
+# keiner der drei Befehle ist per --help belegt (offene Fragen in ADR 0009).
+stages:
+  # ungeprueft: Befehl laut Plan, nicht per `semgrep --help` belegt.
+  - name: semgrep
+    run: "semgrep scan --config p/default --error --metrics=off"
+    stage: 4
+    optional: true
+    required_in: [security-fix, dependency-update]
+    timeout_ms: 600000
+  # ungeprueft: Unterbefehl `git` und `--log-opts` nicht per `gitleaks --help` belegt
+  # (aeltere Versionen: `gitleaks detect --log-opts=...`). {base} = Basis-Commit des Laufs.
+  - name: gitleaks
+    run: "gitleaks git --log-opts=\"{base}..HEAD\" --redact --exit-code 1 ."
+    stage: 4
+    optional: true
+    required_in: [security-fix, dependency-update]
+    timeout_ms: 300000
+  # ungeprueft: Befehl laut Plan, nicht per `trivy fs --help` belegt.
+  - name: trivy
+    run: "trivy fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 ."
+    stage: 4
+    optional: true
+    required_in: [security-fix, dependency-update]
+    timeout_ms: 600000

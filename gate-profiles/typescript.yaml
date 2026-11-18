@@ -11,6 +11,15 @@ network_allow: ["registry.npmjs.org"]
 acceptance:
   run: "bun test {files}"
 
+# Geteilte Stufe 4 (Semgrep, gitleaks, Trivy) aus gate-profiles/_shared/security.yaml.
+includes: [security]
+
+# Eingaben des internen Gates coverage_diff (Stufe 5); lcov erzeugt das Gate `coverage`.
+coverage:
+  lcov: "coverage/lcov.info"
+  include: ["src/**", "packages/**/src/**", "lib/**", "app/**"]
+  threshold: 0.8
+
 stages:
   - name: format
     run: "npx --no-install biome check ."
@@ -22,3 +31,19 @@ stages:
   - name: unit
     run: "bun test"
     stage: 1
+  # Stufe 3 (E2E). UNGEPRUEFT: `playwright test` ist nicht per `npx playwright test --help` belegt,
+  # Playwright fehlt auf der Entwicklungsmaschine (ADR 0009). `npx --no-install` endet bei fehlendem
+  # Paket mit Exit 1 (belegt), deshalb vorher pruefen und als fehlendes Werkzeug (127) melden.
+  - name: e2e
+    run: "if [ -e node_modules/.bin/playwright ]; then npx --no-install playwright test; else echo 'playwright fehlt (node_modules/.bin/playwright)' >&2; exit 127; fi"
+    stage: 3
+    optional: true
+    timeout_ms: 600000
+  # Stufe 5: lcov mit Bun erzeugen (belegt: `bun test --help`, Bun 1.4.4; Datei coverage/lcov.info per Probelauf).
+  - name: coverage
+    run: "bun test --coverage --coverage-reporter=lcov"
+    stage: 5
+    timeout_ms: 600000
+  - name: coverage_diff
+    internal: coverage_diff
+    stage: 5
