@@ -12,6 +12,8 @@ Unveraendert kopiert nach `third_party/ecc/`:
 
 Uebernommene Ideen (eigene Umsetzung): Groessenklassen und Security-Trigger (orch-pipeline), Delivery-Gate, Eskalationskriterien (loop-operator), Rollenzuschnitt der Agents.
 
+- GateGuard (skills/gateguard): Idee, eigene Umsetzung (`hooks/scripts/gateguard.ts`, eigene deutsche Fassung der Edit- und Write-Fragen, kein Code uebernommen)
+
 ## Ruflo (ruvnet/ruflo), MIT
 
 Quelle: https://github.com/ruvnet/ruflo. Kein Code uebernommen, nur Ideen in eigener Umsetzung:
