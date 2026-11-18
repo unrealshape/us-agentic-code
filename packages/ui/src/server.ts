@@ -15,12 +15,12 @@ export function createApp(store: Store): Hono {
   return app;
 }
 
-/** Startet den Server; bindet ausschliesslich an 127.0.0.1. /ws liefert den Event-Strom. */
-export function startServer(store: Store, opts: { port?: number } = {}) {
+/** Startet den Server; Standard 127.0.0.1, andere Adresse nur bewusst per `host`. /ws liefert den Event-Strom. */
+export function startServer(store: Store, opts: { port?: number; host?: string } = {}) {
   const app = createApp(store);
   type WsData = { lastId: number; timer?: ReturnType<typeof setInterval> };
   return Bun.serve<WsData>({
-    hostname: "127.0.0.1",
+    hostname: opts.host ?? "127.0.0.1",
     port: opts.port ?? 7777,
     fetch(req, server) {
       if (new URL(req.url).pathname === "/ws") {

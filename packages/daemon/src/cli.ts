@@ -287,10 +287,13 @@ async function main() {
       process.exit(missing ? 1 : 0);
     }
     case "ui": {
-      const { values } = parseArgs({ args: rest, options: { port: { type: "string", default: "7777" } } });
+      const { values } = parseArgs({
+        args: rest,
+        options: { port: { type: "string", default: "7777" }, host: { type: "string", default: "127.0.0.1" } },
+      });
       const { startServer } = await import("../../ui/src/server");
-      const server = startServer(openStore(join(HOME, "usac.db")), { port: Number(values.port) });
-      console.log(`UI laeuft: http://127.0.0.1:${server.port}/`);
+      const server = startServer(openStore(join(HOME, "usac.db")), { port: Number(values.port), host: values.host });
+      console.log(`UI laeuft: http://${values.host}:${server.port}/`);
       break;
     }
     default:
