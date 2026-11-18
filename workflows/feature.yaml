@@ -23,6 +23,7 @@ phases:
   - name: review           # frischer Kontext, Belegpflicht
     role: code-reviewer
     block_on: [critical, high]
+  - name: integrate        # Conventional Commit der Implementierung vor dem Push
   - name: push
   - name: pr
   - name: approve_h2       # Freigabe vor Merge

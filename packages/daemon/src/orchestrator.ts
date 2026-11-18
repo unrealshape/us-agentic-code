@@ -251,6 +251,8 @@ registerPhase("integrate", async (wi, ctx) => {
   const prefix = wi.type === "bugfix" ? "fix" : wi.type === "feature" ? "feat" : wi.type === "refactor" ? "refactor" : "chore";
   const sha = await ctx.commit(wi.worktree!, `${prefix}: ${wi.title}\n\nUsac-Trace: ${wi.id}`);
   ctx.emit(wi, "integrated", { branch: wi.branch, commit: sha });
+  // Nur als letzte Phase beendet integrate den Auftrag (bugfix); sonst folgen push/pr (feature).
+  if (ctx.workflow.phases.at(-1)?.name !== "integrate") return wi;
   wi = ctx.save(wi, { phase: "done" }, { status: "done" });
   ctx.emit(wi, "workitem.done", { branch: wi.branch, commit: sha });
   return wi;

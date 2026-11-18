@@ -14,6 +14,7 @@ import { createOrchestrator } from "../../packages/daemon/src/orchestrator";
 import { getPhase, registerPhase, restorePhases, snapshotPhases, type PhaseHandler, type PhaseSnapshot } from "../../packages/daemon/src/phases";
 import { ScriptedRunner, type Handler } from "../../packages/daemon/src/runner/scripted";
 import { openStore, type Store } from "../../packages/daemon/src/store";
+import { createIntegratorHandlers, realGit, type CmdResult } from "../../packages/daemon/src/integrator";
 
 const ACC_PATH = "spec/acceptance/cooldown_spec.lua";
 
@@ -104,8 +105,44 @@ describe("Slice 3: Orchestrator als Interpreter", () => {
     const idx = order.map((t) => types.indexOf(t));
     for (const i of idx) expect(i).toBeGreaterThanOrEqual(0);
     expect([...idx].sort((a, b) => a - b)).toEqual(idx);
-    // Kein integrate im feature-Workflow.
-    expect(types).not.toContain("integrated");
+    // integrate committet vor push, beendet den feature-Workflow aber nicht.
+    expect(types.indexOf("integrated")).toBeGreaterThan(types.indexOf("review.approved"));
+    expect(types.indexOf("integrated")).toBeLessThan(types.indexOf("test.phase.push"));
+    expect(types).not.toContain("workitem.done");
+  }, 60_000);
+
+  test("Implementierung ist vor push committet, PR-Text kommt aus diesem Commit", async () => {
+    const { project, store, orch } = setup();
+    let pushed: { files: string; message: string } | null = null;
+    registerPhase("push", async (wi, ctx) => {
+      const files = await realGit(wi.worktree!, ["show", "--name-only", "--format=", "HEAD"]);
+      const message = await realGit(wi.worktree!, ["log", "-1", "--format=%B"]);
+      const status = await realGit(wi.worktree!, ["status", "--porcelain"]);
+      expect(status.output.trim()).toBe("");
+      pushed = { files: files.output, message: message.output };
+      ctx.emit(wi, "test.phase.push");
+      return wi;
+    });
+    let body = "";
+    const gh = async (_cwd: string, args: string[]): Promise<CmdResult> => {
+      if (args[0] === "pr" && args[1] === "create") {
+        body = args[args.indexOf("--body") + 1]!;
+        return { exitCode: 0, output: "https://github.com/x/y/pull/9" };
+      }
+      return { exitCode: 0, output: "" };
+    };
+    registerPhase("pr", createIntegratorHandlers({ git: realGit, gh }).pr);
+
+    const wi = await orch.submit({ projectPath: project, type: "feature", title: "Cooldown beachten", description: "x" });
+    const result = await orch.run(wi.id);
+    expect(result.reason).toBeUndefined();
+    expect(result.status).toBe("awaiting_approval");
+    expect(pushed).not.toBeNull();
+    expect(pushed!.files).toContain("src/rotation.lua");
+    expect(pushed!.message).toContain("feat: Cooldown beachten");
+    expect(pushed!.message).toContain(`Usac-Trace: ${wi.id}`);
+    expect(body).toContain("feat: Cooldown beachten");
+    expect(store.getWorkItem(wi.id)!.status).toBe("awaiting_approval");
   }, 60_000);
 
   test("jeder Slice bekommt eigenen roten Test vor der Implementierung", async () => {

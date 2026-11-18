@@ -8,7 +8,7 @@ describe("Workflow feature", () => {
   test("feature hat Spec, Slice-Planung, rote Slice-Tests, Freigaben und Integrator in dieser Reihenfolge", () => {
     expect(wf.phases.map((p) => p.name)).toEqual([
       "setup", "spec", "approve_spec", "plan", "acceptance", "approve_h1",
-      "lock", "implement", "review", "push", "pr", "approve_h2", "merge",
+      "lock", "implement", "review", "integrate", "push", "pr", "approve_h2", "merge",
     ]);
   });
 
