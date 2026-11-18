@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Finding, Model, Size } from "@usac/shared";
+import type { Finding, Model, Size, WorkItemType } from "@usac/shared";
 import { checkAdrRule } from "./adr-check";
 import { git } from "./exec";
 import { Escalate, type PhaseHandler } from "./phases";
@@ -14,10 +14,11 @@ type SeatFinding = z.infer<typeof Finding>;
 /**
  * Review-Sitze: immer ein Code-Review; bei Security-Triggern zusaetzlich der security-reviewer,
  * sonst bei Groesse large ein zweites, unabhaengiges Code-Review. Hoechstens zwei Sitze.
+ * Auftraege vom Typ security-fix haben immer einen Security-Sitz, auch ohne Trigger.
  */
-export function reviewSeats(size: Size, triggers: string[]): ReviewSeat[] {
+export function reviewSeats(size: Size, triggers: string[], type?: WorkItemType): ReviewSeat[] {
   const seats: ReviewSeat[] = [{ role: "code-reviewer", reason: "standard" }];
-  if (triggers.length) seats.push({ role: "security-reviewer", reason: "security" });
+  if (triggers.length || type === "security-fix") seats.push({ role: "security-reviewer", reason: "security" });
   else if (size === "large") seats.push({ role: "code-reviewer", reason: "size_large" });
   return seats;
 }
@@ -43,7 +44,7 @@ export function createReviewHandler(): PhaseHandler {
     const adrFindings: SeatFinding[] = adr.require_for_dependencies ? checkAdrRule(wi.worktree!, baseRef, adr.dir) : [];
     if (adr.require_for_dependencies) ctx.emit(wi, "review.adr", { dir: adr.dir, findings: adrFindings });
 
-    const seats = reviewSeats(wi.size, triggers);
+    const seats = reviewSeats(wi.size, triggers, wi.type);
     const results: { seat: ReviewSeat; model: Model; blocking: boolean; findings: SeatFinding[] }[] = [];
     for (const seat of seats) {
       const route = resolveModel(ctx.routing, seat.role, { size: wi.size, budgetUsed: ctx.budgetUsed(), available: ctx.available });

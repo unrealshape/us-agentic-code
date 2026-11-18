@@ -52,12 +52,16 @@ export interface PhaseContext {
   commit(cwd: string, message: string): Promise<string>;
 }
 
+/** Zusatzoptionen einer Session: gesperrte Werkzeuge und zusaetzliche Umgebung (ausgewertet ab Task 9). */
+export type RunRoleOptions = { disallowedTools?: string[]; env?: Record<string, string> };
+
 /** Startet eine Rolle, validiert Schema und Belege. Ungueltige Ausgaben gelten als Fehlversuch. */
 export type RunRole = <R extends RoleWithOutput>(
   wi: WorkItem,
   role: R,
   model: Model,
   prompt: string,
+  opts?: RunRoleOptions,
 ) => Promise<{ ok: true; output: z.infer<(typeof ROLE_OUTPUTS)[R]> } | { ok: false; feedback: string }>;
 
 export type PhaseHandler = (wi: WorkItem, ctx: PhaseContext) => Promise<WorkItem>;

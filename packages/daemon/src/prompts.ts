@@ -96,6 +96,7 @@ export function testEngineerPrompt(
 - Aendere ausschliesslich Testdateien. Produktivcode ist tabu.
 - Kriterien dieses Slice:
 ${criteriaBlock(slice.criteria)}
+- Jeder Testname traegt die Marke [AC-n] des Kriteriums, das er prueft (z. B. it("[AC-1] ...")); ohne Marke gilt das Kriterium als unbelegt.
 - Nenne in "acceptance_tests" die Pfade relativ zum Projektordner.`
       : `Deine Aufgabe: Schreibe ZUERST einen ausfuehrbaren Abnahmetest, der das erwartete Verhalten aus Nutzersicht prueft.
 - Der Test muss mit dem aktuellen Code ROT sein (er beweist den Fehler bzw. das fehlende Verhalten).
@@ -137,15 +138,101 @@ export function reviewerPrompt(wi: WorkItem, diff: string, feedback?: string): s
     .join("\n\n");
 }
 
-export function securityReviewerPrompt(wi: WorkItem, diff: string, triggers: string[], feedback?: string): string {
+/**
+ * Prompt des Security Reviewers. `gateOutput` sind die Ausgaben der Stufe-4-Gates aus `verify`
+ * (Semgrep, gitleaks, Trivy), falls vorhanden.
+ */
+export function securityReviewerPrompt(wi: WorkItem, diff: string, triggers: string[], feedback?: string, gateOutput?: string): string {
+  const trig = triggers.length ? triggers.join(", ") : `keine (Auftragstyp ${wi.type})`;
   return [
     taskBlock(wi),
     `Deine Aufgabe: Pruefe die Aenderung unten ausschliesslich auf Sicherheit. Du kennst die Implementierung und andere Reviews nicht und bewertest nur, was im Code steht.
-- Ausgeloeste Security-Trigger: ${triggers.join(", ")}. Pruefe diese Bereiche gezielt (z. B. Rechtepruefung, Geheimnisse im Code, Injection, Befehlsausfuehrung, Datei- und Netzzugriffe, neue Abhaengigkeiten, CI-Rechte).
+- Ausgeloeste Security-Trigger: ${trig}. Pruefe diese Bereiche gezielt (z. B. Rechtepruefung, Geheimnisse im Code, Injection, Befehlsausfuehrung, Datei- und Netzzugriffe, neue Abhaengigkeiten, CI-Rechte).
 - Befunde "critical" und "high" brauchen Belege.
 - verdict "approve" nur, wenn keine critical/high-Befunde bleiben.`,
+    gateOutput ? `Ausgaben der Security-Gates (Stufe 4) aus verify:\n${gateOutput.slice(0, 20_000)}` : "",
     "Diff:\n```diff\n" + diff.slice(0, 40_000) + "\n```",
     feedback ? `Rueckmeldung zu deiner letzten Ausgabe:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Architect im Design: schlaegt vor, entscheidet nicht. Das ADR schreibt der Orchestrator nach Freigabe. */
+export function architectPrompt(wi: WorkItem, spec?: AnalystOutput, feedback?: string): string {
+  return [
+    taskBlock(wi),
+    spec ? `Spec: ${spec.title}\n${spec.summary}\n\nAkzeptanzkriterien:\n${criteriaBlock(spec.criteria)}` : "",
+    `Deine Aufgabe: Entwirf die Architektur fuer diesen Auftrag.
+- Du schreibst keine Dateien. Liefere den Vorschlag ausschliesslich als JSON.
+- Nenne mindestens zwei Optionen mit Vor- und Nachteilen.
+- "decision" ist deine Empfehlung; entscheiden wird ein Mensch.
+- Liefere in "adr" einen ADR-Entwurf (Titel, Kontext, Entscheidung, Folgen), wenn die Entscheidung Bestand haben soll.
+- Risiken in "risks", Unklares in "questions".`,
+    feedback ? `Rueckmeldung zum letzten Versuch:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Spike: der Architect untersucht nur lesend; den Bericht rendert der Orchestrator. */
+export function researchPrompt(wi: WorkItem, feedback?: string): string {
+  return [
+    taskBlock(wi),
+    `Deine Aufgabe: Untersuche die Frage des Auftrags (Spike). Du aenderst nichts.
+- Du darfst nur lesen; geaenderte Dateien werden verworfen.
+- Liefere Befunde als belegte Aussagen in "claims", Optionen mit Vor- und Nachteilen in "options", deine Empfehlung in "decision".
+- Kein "adr" im Spike. Offene Punkte in "questions", Risiken in "risks".
+- Den Bericht unter docs/spikes/ erzeugt der Orchestrator aus deiner Ausgabe.`,
+    feedback ? `Rueckmeldung zum letzten Versuch:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Environment Engineer: Build-, Abhaengigkeits- und Werkzeug-Einrichtung, keine Tests. */
+export function environmentPrompt(wi: WorkItem, feedback?: string): string {
+  return [
+    taskBlock(wi),
+    `Deine Aufgabe: Richte die Umgebung des Projekts ein bzw. aktualisiere sie (Abhaengigkeiten, Build, Werkzeuge).
+- Testdateien, .usac/** und .github/** sind tabu; Aenderungen daran werden verworfen.
+- Danach muessen die Gates der Stufen 1 und 2 gruen sein.
+- Nenne in "changed_files" die geaenderten Dateien und in "setup_commands" die noetigen Befehle.`,
+    feedback ? `Ergebnis des letzten Versuchs:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** QA Engineer: E2E-Tests gegen die laufende Preview. */
+export function qaPrompt(wi: WorkItem, baseUrl: string, criteria: AcceptanceCriterion[] = [], feedback?: string): string {
+  return [
+    taskBlock(wi),
+    `Deine Aufgabe: Schreibe E2E-Tests, die die Anwendung aus Nutzersicht pruefen.
+- Die Preview laeuft unter BASE_URL=${baseUrl} (auch als Umgebungsvariable BASE_URL gesetzt).
+- Lege neue Dateien nur unter den Testpfaden des Projekts an; alles andere wird verworfen.
+- Nenne in "e2e_tests" die Pfade relativ zum Projektordner und in "criteria" die abgedeckten Kriterien.`,
+    criteria.length ? `Akzeptanzkriterien:\n${criteriaBlock(criteria)}` : "",
+    feedback ? `Rueckmeldung zum letzten Versuch:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Charakterisierung (refactor): Tests halten das heutige Verhalten fest und muessen GRUEN sein. */
+export function characterizePrompt(wi: WorkItem, feedback?: string): string {
+  return [
+    taskBlock(wi),
+    `Deine Aufgabe: Schreibe Charakterisierungstests, die das heutige Verhalten festhalten.
+- Die Tests muessen mit dem aktuellen Code GRUEN sein; sie sichern den Umbau ab.
+- Aendere ausschliesslich Testdateien. Produktivcode ist tabu.
+- Nenne in "acceptance_tests" die Pfade relativ zum Projektordner.`,
+    feedback ? `Rueckmeldung zum letzten Versuch:\n${feedback}` : "",
     PRECISION_RULES,
   ]
     .filter(Boolean)
