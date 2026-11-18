@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export type MemoryStatus = "proposed" | "verified" | "stale";
 export interface Evidence { file: string; lines: string; quote: string }
@@ -38,6 +38,9 @@ export function addEntry(db: Database, entry: MemoryEntry): number {
   const ev = entry.evidence ?? [];
   if (ev.length === 0 || ev.some((e) => !e.file?.trim() || !e.quote?.trim())) {
     throw new Error("Memory-Eintrag ohne Beleg (file, quote) abgelehnt");
+  }
+  if (ev.some((e) => e.quote.trim().length < 8 || !/^\d+(-\d+)?$/.test(e.lines ?? ""))) {
+    throw new Error("Memory-Eintrag mit trivialem Zitat (min. 8 Zeichen) oder ungueltigen Zeilen (z. B. 3 oder 3-7) abgelehnt");
   }
   let id = 0;
   db.transaction(() => {
@@ -79,9 +82,18 @@ export function setStatus(db: Database, id: number, status: MemoryStatus): void 
 export function verifyEntry(db: Database, id: number, root: string): boolean {
   const ev = db.query("SELECT file, quote FROM evidence WHERE entry_id = ?").all(id) as Evidence[];
   if (ev.length === 0) return false;
-  const ok = ev.every((e) => {
+  const base = resolve(root);
+  const paths = ev.map((e) => {
+    const full = resolve(base, e.file);
+    const rel = relative(base, full);
+    if (isAbsolute(e.file) || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      throw new Error(`Beleg-Pfad ausserhalb von root: ${e.file}`);
+    }
+    return full;
+  });
+  const ok = ev.every((e, i) => {
     try {
-      return readFileSync(join(root, e.file), "utf8").replace(/\r\n/g, "\n").includes(e.quote.replace(/\r\n/g, "\n"));
+      return readFileSync(paths[i]!, "utf8").replace(/\r\n/g, "\n").includes(e.quote.replace(/\r\n/g, "\n"));
     } catch {
       return false;
     }
@@ -96,6 +108,7 @@ export function exportVerified(db: Database, outDir: string): number {
     .query("SELECT id, kind, text, status, created_at FROM entries WHERE status = 'verified' ORDER BY id")
     .all() as Array<{ id: number; kind: string; text: string; status: string; created_at: string }>;
   mkdirSync(outDir, { recursive: true });
+  const names = new Set<string>();
   for (const e of load(db, rows)) {
     const md = [
       `# ${e.kind} ${e.id}`,
@@ -109,7 +122,13 @@ export function exportVerified(db: Database, outDir: string): number {
       ...e.evidence.map((v) => `- ${v.file}:${v.lines}\n  > ${v.quote.replace(/\n/g, "\n  > ")}`),
       "",
     ].join("\n");
-    writeFileSync(join(outDir, `${e.kind.replace(/[^\w-]/g, "_")}-${e.id}.md`), md);
+    const name = `${e.kind.replace(/[^\w-]/g, "_")}-${e.id}.md`;
+    names.add(name);
+    writeFileSync(join(outDir, name), md);
+  }
+  // Veraltete Export-Dateien (Muster <kind>-<id>.md) entfernen; fremde Dateien bleiben.
+  for (const f of readdirSync(outDir)) {
+    if (/^[\w-]+-\d+\.md$/.test(f) && !names.has(f)) rmSync(join(outDir, f));
   }
   return rows.length;
 }
