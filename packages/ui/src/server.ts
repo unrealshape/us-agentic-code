@@ -24,6 +24,10 @@ export function startServer(store: Store, opts: { port?: number; host?: string }
     port: opts.port ?? 7777,
     fetch(req, server) {
       if (new URL(req.url).pathname === "/ws") {
+        // Nur die eigene Seite darf den Event-Strom lesen (Schutz gegen Cross-Site-WebSocket).
+        if (req.headers.get("origin") !== `http://127.0.0.1:${server.port}`) {
+          return new Response("Origin nicht erlaubt", { status: 403 });
+        }
         const lastId = Number(new URL(req.url).searchParams.get("since") ?? 0) || 0;
         if (server.upgrade(req, { data: { lastId } })) return undefined;
         return new Response("Upgrade fehlgeschlagen", { status: 400 });
