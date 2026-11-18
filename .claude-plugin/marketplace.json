@@ -1,0 +1,14 @@
+{
+  "name": "us-agentic-code",
+  "owner": {
+    "name": "Fatih Elmas"
+  },
+  "description": "US-AGENTIC-CODE: lokales Entwicklungsteam aus Claude-Code-Agents mit Abnahmetests zuerst, Belegpflicht und Gates.",
+  "plugins": [
+    {
+      "name": "usac",
+      "source": "./",
+      "description": "US-AGENTIC-CODE: Agent-Orchestrierung fuer Software-Entwicklung"
+    }
+  ]
+}

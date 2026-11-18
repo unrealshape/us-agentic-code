@@ -1,0 +1,8 @@
+{
+  "name": "usac",
+  "version": "0.1.0",
+  "description": "US-AGENTIC-CODE: eigenes Entwicklungsteam aus Claude-Code-Agents. Rueckwaerts entwickeln, Belegpflicht, Gates, lokal und ohne Zusatzkosten.",
+  "author": { "name": "Fatih Elmas" },
+  "license": "MIT",
+  "keywords": ["agents", "orchestration", "tdd", "quality-gates"]
+}

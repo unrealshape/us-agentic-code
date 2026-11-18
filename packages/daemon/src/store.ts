@@ -1,0 +1,274 @@
+import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import type { Actor, Size, UsacEvent, WorkItemStatus, WorkItemType } from "@usac/shared";
+
+export interface WorkItem {
+  id: string;
+  projectPath: string;
+  type: WorkItemType;
+  title: string;
+  description: string;
+  size: Size;
+  status: WorkItemStatus;
+  branch: string | null;
+  worktree: string | null;
+  state: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface GateResult {
+  id: number;
+  workItemId: string;
+  name: string;
+  status: "passed" | "failed" | "skipped";
+  exitCode: number;
+  durationMs: number;
+  output: string;
+}
+
+export interface Approval {
+  id: number;
+  workItemId: string;
+  kind: string;
+  context: unknown;
+  status: "pending" | "granted" | "denied";
+  note: string | null;
+}
+
+export type NewEvent = Omit<UsacEvent, "id" | "ts"> & { ts?: string };
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  trace_id TEXT NOT NULL,
+  span_id TEXT NOT NULL,
+  parent_span_id TEXT,
+  project TEXT NOT NULL,
+  type TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_trace ON events(trace_id, id);
+CREATE TABLE IF NOT EXISTS workitems (
+  id TEXT PRIMARY KEY,
+  project_path TEXT NOT NULL,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  size TEXT NOT NULL,
+  status TEXT NOT NULL,
+  branch TEXT,
+  worktree TEXT,
+  state TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gate_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workitem_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  exit_code INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  output TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS acceptance_locks (
+  workitem_id TEXT PRIMARY KEY,
+  files TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  locked_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS approvals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workitem_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  context TEXT NOT NULL,
+  status TEXT NOT NULL,
+  note TEXT
+);
+`;
+
+export class Store {
+  readonly db: Database;
+
+  constructor(path: string) {
+    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+    this.db = new Database(path, { create: true });
+    this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000;");
+    this.db.exec(SCHEMA);
+  }
+
+  // ---- Events (nur anhaengen) ----------------------------------------------
+
+  append(ev: NewEvent): UsacEvent {
+    const ts = ev.ts ?? new Date().toISOString();
+    const row = this.db
+      .query(
+        `INSERT INTO events (ts, trace_id, span_id, parent_span_id, project, type, actor, data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      )
+      .get(ts, ev.traceId, ev.spanId, ev.parentSpanId ?? null, ev.project, ev.type, ev.actor, JSON.stringify(ev.data ?? {})) as {
+      id: number;
+    };
+    return { ...ev, id: row.id, ts, parentSpanId: ev.parentSpanId ?? null };
+  }
+
+  events(filter: { traceId?: string; sinceId?: number; type?: string; limit?: number } = {}): UsacEvent[] {
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (filter.traceId) {
+      where.push("trace_id = ?");
+      args.push(filter.traceId);
+    }
+    if (filter.sinceId !== undefined) {
+      where.push("id > ?");
+      args.push(filter.sinceId);
+    }
+    if (filter.type) {
+      where.push("type = ?");
+      args.push(filter.type);
+    }
+    const sql = `SELECT * FROM events ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY id ASC ${
+      filter.limit ? `LIMIT ${Math.floor(filter.limit)}` : ""
+    }`;
+    return (this.db.query(sql).all(...args) as Record<string, unknown>[]).map((r) => ({
+      id: r.id as number,
+      ts: r.ts as string,
+      traceId: r.trace_id as string,
+      spanId: r.span_id as string,
+      parentSpanId: (r.parent_span_id as string | null) ?? null,
+      project: r.project as string,
+      type: r.type as string,
+      actor: r.actor as Actor,
+      data: JSON.parse(r.data as string),
+    }));
+  }
+
+  // ---- WorkItems ---------------------------------------------------------------
+
+  createWorkItem(wi: Omit<WorkItem, "createdAt" | "branch" | "worktree" | "state" | "status">): WorkItem {
+    const createdAt = new Date().toISOString();
+    this.db
+      .query(
+        `INSERT INTO workitems (id, project_path, type, title, description, size, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`,
+      )
+      .run(wi.id, wi.projectPath, wi.type, wi.title, wi.description, wi.size, createdAt);
+    return this.getWorkItem(wi.id)!;
+  }
+
+  getWorkItem(id: string): WorkItem | null {
+    const r = this.db.query("SELECT * FROM workitems WHERE id = ?").get(id) as Record<string, unknown> | null;
+    if (!r) return null;
+    return {
+      id: r.id as string,
+      projectPath: r.project_path as string,
+      type: r.type as WorkItemType,
+      title: r.title as string,
+      description: r.description as string,
+      size: r.size as Size,
+      status: r.status as WorkItemStatus,
+      branch: (r.branch as string | null) ?? null,
+      worktree: (r.worktree as string | null) ?? null,
+      state: JSON.parse(r.state as string),
+      createdAt: r.created_at as string,
+    };
+  }
+
+  listWorkItems(): WorkItem[] {
+    const ids = this.db.query("SELECT id FROM workitems ORDER BY created_at DESC").all() as { id: string }[];
+    return ids.map((r) => this.getWorkItem(r.id)!);
+  }
+
+  updateWorkItem(id: string, patch: Partial<Pick<WorkItem, "status" | "branch" | "worktree" | "state" | "size">>): void {
+    const cur = this.getWorkItem(id);
+    if (!cur) throw new Error(`WorkItem ${id} nicht gefunden`);
+    const next = { ...cur, ...patch };
+    this.db
+      .query("UPDATE workitems SET status = ?, branch = ?, worktree = ?, state = ?, size = ? WHERE id = ?")
+      .run(next.status, next.branch, next.worktree, JSON.stringify(next.state), next.size, id);
+  }
+
+  // ---- Gates ---------------------------------------------------------------------
+
+  recordGate(g: Omit<GateResult, "id">): GateResult {
+    const row = this.db
+      .query(
+        `INSERT INTO gate_results (workitem_id, name, status, exit_code, duration_ms, output)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+      )
+      .get(g.workItemId, g.name, g.status, g.exitCode, g.durationMs, g.output) as { id: number };
+    return { ...g, id: row.id };
+  }
+
+  getGate(id: number): GateResult | null {
+    const r = this.db.query("SELECT * FROM gate_results WHERE id = ?").get(id) as Record<string, unknown> | null;
+    if (!r) return null;
+    return {
+      id: r.id as number,
+      workItemId: r.workitem_id as string,
+      name: r.name as string,
+      status: r.status as GateResult["status"],
+      exitCode: r.exit_code as number,
+      durationMs: r.duration_ms as number,
+      output: r.output as string,
+    };
+  }
+
+  // ---- Testsperre ------------------------------------------------------------------
+
+  saveLock(workItemId: string, files: string[], hash: string): void {
+    this.db
+      .query("INSERT OR REPLACE INTO acceptance_locks (workitem_id, files, hash, locked_at) VALUES (?, ?, ?, ?)")
+      .run(workItemId, JSON.stringify(files), hash, new Date().toISOString());
+  }
+
+  getLock(workItemId: string): { files: string[]; hash: string } | null {
+    const r = this.db.query("SELECT * FROM acceptance_locks WHERE workitem_id = ?").get(workItemId) as Record<
+      string,
+      unknown
+    > | null;
+    return r ? { files: JSON.parse(r.files as string), hash: r.hash as string } : null;
+  }
+
+  // ---- Freigaben -------------------------------------------------------------------
+
+  createApproval(workItemId: string, kind: string, context: unknown): Approval {
+    const row = this.db
+      .query("INSERT INTO approvals (workitem_id, kind, context, status) VALUES (?, ?, ?, 'pending') RETURNING id")
+      .get(workItemId, kind, JSON.stringify(context)) as { id: number };
+    return this.getApproval(row.id)!;
+  }
+
+  resolveApproval(id: number, granted: boolean, note?: string): void {
+    this.db.query("UPDATE approvals SET status = ?, note = ? WHERE id = ?").run(granted ? "granted" : "denied", note ?? null, id);
+  }
+
+  getApproval(id: number): Approval | null {
+    const r = this.db.query("SELECT * FROM approvals WHERE id = ?").get(id) as Record<string, unknown> | null;
+    if (!r) return null;
+    return {
+      id: r.id as number,
+      workItemId: r.workitem_id as string,
+      kind: r.kind as string,
+      context: JSON.parse(r.context as string),
+      status: r.status as Approval["status"],
+      note: (r.note as string | null) ?? null,
+    };
+  }
+
+  pendingApprovals(): Approval[] {
+    const ids = this.db.query("SELECT id FROM approvals WHERE status = 'pending' ORDER BY id").all() as { id: number }[];
+    return ids.map((r) => this.getApproval(r.id)!);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+export function openStore(path: string): Store {
+  return new Store(path);
+}

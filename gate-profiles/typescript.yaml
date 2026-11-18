@@ -1,0 +1,21 @@
+# Gate-Profil fuer TypeScript-Projekte (Bun oder Node).
+name: typescript
+detect: ["**/*.ts", "**/*.tsx", "package.json"]
+test_globs: ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "tests/**", "test/**", "__tests__/**"]
+protected_globs: ["tsconfig.json", "biome.json", ".eslintrc*", "eslint.config.*", "vitest.config.*", ".usac/**", ".github/**"]
+skip_markers: [".skip(", ".only(", "xit(", "xdescribe(", "@ts-ignore", "@ts-expect-error"]
+
+acceptance:
+  run: "bun test {files}"
+
+stages:
+  - name: format
+    run: "npx --no-install biome check ."
+    stage: 1
+    optional: true
+  - name: types
+    run: "npx --no-install tsc --noEmit"
+    stage: 1
+  - name: unit
+    run: "bun test"
+    stage: 1

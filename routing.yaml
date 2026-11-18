@@ -1,0 +1,33 @@
+# Modell-Routing von US-AGENTIC-CODE.
+# Grundsatz: jede Aufgabe bekommt das guenstigste Modell, das sie sicher schafft.
+# Leiter: haiku < sonnet < opus < fable
+
+defaults:
+  analyst: opus
+  explorer: haiku
+  architect: opus
+  tech-lead: opus
+  test-engineer:
+    acceptance: opus
+    slices: sonnet
+  implementer: sonnet
+  build-fixer: sonnet
+  environment-engineer: sonnet
+  code-reviewer: opus
+  security-reviewer: fable
+  qa-engineer: sonnet
+  integrator: haiku
+  docs-writer: sonnet
+  learner: haiku
+
+raise:
+  # Bei Groesse "large" eine Stufe hoeher.
+  size_large: [architect, code-reviewer]
+  # Nach so vielen Fehlversuchen derselben Rolle eine Stufe hoeher.
+  after_failures: 2
+
+budget:
+  # Ab 75 % Kontingent braucht Fable eine Freigabe, ab 90 % hoechstens Sonnet.
+  fable_needs_approval_above: 0.75
+  only_sonnet_haiku_above: 0.90
+  exempt: [security-reviewer]

@@ -1,0 +1,31 @@
+# Gate-Profil fuer Lua-Projekte (erstes Projekt: Rotation-Bot).
+name: lua
+detect: ["**/*.lua", "**/*.rockspec"]
+
+# Dateien, die nur der Test Engineer anfassen darf.
+test_globs: ["spec/**", "**/*_spec.lua", "test/**", "tests/**"]
+
+# Dateien, die kein Agent aendern darf (Gate-Konfiguration).
+protected_globs: [".luacheckrc", ".busted", ".stylua.toml", "stylua.toml", ".luarc.json", ".usac/**", ".github/**"]
+
+# Marker, mit denen Tests uebersprungen wuerden.
+skip_markers: ["pending(", "luacheck: ignore", "luacheck: push ignore"]
+
+acceptance:
+  run: "busted --output=TAP {files}"
+
+stages:
+  - name: format
+    run: "stylua --check src"
+    stage: 1
+    optional: true
+  - name: lint
+    run: "luacheck src spec --no-color"
+    stage: 1
+  - name: unit
+    run: "busted --output=TAP"
+    stage: 1
+  - name: coverage
+    run: "busted --coverage --output=TAP && luacov && tail -n 5 luacov.report.out"
+    stage: 5
+    optional: true

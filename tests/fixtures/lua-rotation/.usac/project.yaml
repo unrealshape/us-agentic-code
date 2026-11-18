@@ -1,0 +1,4 @@
+name: lua-rotation
+languages: [lua]
+gate_profile: lua
+base_branch: main
