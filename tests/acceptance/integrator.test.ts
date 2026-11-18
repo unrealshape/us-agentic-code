@@ -9,7 +9,7 @@ afterEach(() => restorePhases(snap));
 
 type Approval = { id: number; status: "pending" | "granted" | "denied"; note?: string | null; context?: unknown };
 
-function setup(opts: { ghAuth?: number; approval?: Approval | null; prOutput?: string; prUrl?: string } = {}) {
+function setup(opts: { ghAuth?: number; approval?: Approval | null; prOutput?: string; prUrl?: string; existingPr?: { url: string; state: string } } = {}) {
   const gitCalls: string[][] = [];
   const ghCalls: string[][] = [];
   const git = async (_cwd: string, args: string[]): Promise<CmdResult> => {
@@ -19,7 +19,15 @@ function setup(opts: { ghAuth?: number; approval?: Approval | null; prOutput?: s
   const gh = async (_cwd: string, args: string[]): Promise<CmdResult> => {
     ghCalls.push(args);
     if (args[0] === "auth") return { exitCode: opts.ghAuth ?? 0, output: "" };
-    if (args[0] === "pr" && args[1] === "create") return { exitCode: 0, output: opts.prOutput ?? "https://github.com/x/y/pull/1" };
+    if (args[0] === "pr" && args[1] === "view") {
+      return opts.existingPr
+        ? { exitCode: 0, output: JSON.stringify(opts.existingPr) }
+        : { exitCode: 1, output: 'no pull requests found for branch "usac/wi1"' };
+    }
+    if (args[0] === "pr" && args[1] === "create") {
+      if (opts.existingPr) return { exitCode: 1, output: `a pull request for branch "usac/wi1" into branch "develop" already exists:\n${opts.existingPr.url}` };
+      return { exitCode: 0, output: opts.prOutput ?? "https://github.com/x/y/pull/1" };
+    }
     return { exitCode: 0, output: "" };
   };
   let state: Record<string, unknown> & { phase: string } = { phase: "merge", h2ApprovalId: opts.approval ? opts.approval.id : undefined, prUrl: opts.prUrl ?? "https://github.com/x/y/pull/1" };
@@ -87,6 +95,18 @@ describe("Integrator", () => {
     expect((t.ctx.state(out) as { prUrl?: string }).prUrl).toBe("https://github.com/x/y/pull/42");
     const none = setup({ prOutput: "Warning: kein Link" });
     await expect(none.h.pr(none.wi, none.ctx)).rejects.toBeInstanceOf(Escalate);
+  });
+
+  test("erneuter pr nutzt den vorhandenen offenen PR des Branches", async () => {
+    const t = setup({ existingPr: { url: "https://github.com/x/y/pull/5", state: "OPEN" } });
+    const out = await t.h.pr(t.wi, t.ctx);
+    expect((t.ctx.state(out) as { prUrl?: string }).prUrl).toBe("https://github.com/x/y/pull/5");
+    expect(t.ghCalls.some((a) => a[0] === "pr" && a[1] === "create")).toBe(false);
+    expect(t.events).toContain("pr.reused");
+    // Ein geschlossener PR wird nicht wiederverwendet.
+    const closed = setup({ existingPr: { url: "https://github.com/x/y/pull/5", state: "CLOSED" } });
+    await expect(closed.h.pr(closed.wi, closed.ctx)).rejects.toBeInstanceOf(Escalate);
+    expect(closed.ghCalls.some((a) => a[0] === "pr" && a[1] === "create")).toBe(true);
   });
 
   test("H2 gilt nur fuer die PR-URL, fuer die sie erteilt wurde", async () => {

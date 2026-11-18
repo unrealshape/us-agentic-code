@@ -56,13 +56,25 @@ export function createIntegratorHandlers(deps: { git: GitRunner; gh: GhRunner })
     const branch = safeBranch(wi);
     const cwd = wi.worktree!;
     await requireGh(cwd);
-    const log = await git(cwd, ["log", "-1", "--format=%B"]);
-    const body = log.exitCode === 0 && log.output ? log.output : `Usac-Trace: ${wi.id}`;
-    const r = await gh(cwd, ["pr", "create", "--base", ctx.profile.base_branch, "--head", branch, "--title", wi.title, "--body", body]);
-    if (r.exitCode !== 0) throw new Escalate(`gh pr create fehlgeschlagen: ${r.output}`);
-    const prUrl = r.output.match(/https:\/\/\S+\/pull\/\d+/)?.[0];
-    if (!prUrl) throw new Escalate(`PR-URL nicht in der gh-Ausgabe gefunden: ${r.output}`);
-    ctx.emit(wi, "pr.created", { branch, url: prUrl });
+    // Erneuter Lauf nach Teilerfolg: offenen PR des Branches wiederverwenden statt neu anzulegen.
+    const view = await gh(cwd, ["pr", "view", branch, "--json", "url,state"]);
+    let existing: { url?: string; state?: string } = {};
+    if (view.exitCode === 0) {
+      try { existing = JSON.parse(view.output); } catch { existing = {}; }
+    }
+    let prUrl: string | undefined;
+    if (existing.state === "OPEN" && existing.url) {
+      prUrl = existing.url;
+      ctx.emit(wi, "pr.reused", { branch, url: prUrl });
+    } else {
+      const log = await git(cwd, ["log", "-1", "--format=%B"]);
+      const body = log.exitCode === 0 && log.output ? log.output : `Usac-Trace: ${wi.id}`;
+      const r = await gh(cwd, ["pr", "create", "--base", ctx.profile.base_branch, "--head", branch, "--title", wi.title, "--body", body]);
+      if (r.exitCode !== 0) throw new Escalate(`gh pr create fehlgeschlagen: ${r.output}`);
+      prUrl = r.output.match(/https:\/\/\S+\/pull\/\d+/)?.[0];
+      if (!prUrl) throw new Escalate(`PR-URL nicht in der gh-Ausgabe gefunden: ${r.output}`);
+      ctx.emit(wi, "pr.created", { branch, url: prUrl });
+    }
     // Eine fruehere H2-Freigabe gilt nur fuer ihre eigene PR-URL.
     const old = ctx.state(wi) as { prUrl?: string };
     return ctx.save(wi, old.prUrl && old.prUrl !== prUrl ? { prUrl, h2ApprovalId: undefined } : { prUrl });
