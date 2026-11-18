@@ -116,6 +116,19 @@ async function main() {
       for (const a of store.pendingApprovals().filter((a) => !rest[0] || a.workItemId === rest[0])) {
         console.log(`  Freigabe ${a.id} (${a.kind}) wartet: ${JSON.stringify(a.context)}`);
       }
+      if (rest[0]) {
+        // Kontext-Ueberblick: Spitze je Run gegen das Limit, Ueberschreitungen als Warnung.
+        const evs = store.events({ traceId: rest[0] });
+        for (const e of evs.filter((e) => e.type === "run.finished")) {
+          const d = e.data as { role: string; model: string; peak_context?: number; context_limit?: number };
+          if (d.peak_context === undefined) continue;
+          console.log(`  Kontext ${d.role} (${d.model}): Spitze ${d.peak_context} / ${d.context_limit} Tokens`);
+        }
+        for (const e of evs.filter((e) => e.type === "budget.exceeded")) {
+          const d = e.data as { role: string; context: number; limit: number };
+          console.log(`  WARNUNG Kontext-Limit ueberschritten: ${d.role} bei ${d.context} Tokens (Limit ${d.limit}); Auto-Compact greift.`);
+        }
+      }
       break;
     }
     case "events": {

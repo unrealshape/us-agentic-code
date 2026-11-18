@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import type { z } from "zod";
 import { ROLE_OUTPUTS, type Model, type RoleWithOutput, type Size, type WorkItemType } from "@usac/shared";
 import { loadGateProfile, loadProjectProfile, matchesAny, type GateProfile } from "./config";
+import { ContextBudget } from "./budget";
 import { git } from "./exec";
 import { excludeFromGit, hasGraphify, updateGraph } from "./graph";
 import { validateClaims, validateFindings, type EvidenceError } from "./evidence";
@@ -110,6 +111,7 @@ export function createOrchestrator(opts: OrchestratorOptions) {
     const spanId = `run_${randomBytes(5).toString("hex")}`;
     emit(wi, "run.started", { role, model }, spanId, `role:${role}`);
     const withGraph = existsSync(join(wi.worktree!, "graphify-out/graph.json")) ? `${prompt}\n\n${GRAPH_NOTE}` : prompt;
+    const budget = new ContextBudget();
     const outcome = await runner.run(
       {
         role,
@@ -121,9 +123,24 @@ export function createOrchestrator(opts: OrchestratorOptions) {
         maxTurns: limits.maxTurns,
         timeoutMs: limits.runTimeoutMs,
       },
-      (e) => emit(wi, "run.output", e, spanId, `role:${role}`),
+      (e) => {
+        if (e.kind === "usage" && e.context !== undefined) {
+          // Melden, nie abbrechen: Auto-Compact kuemmert sich um den Kontext.
+          if (budget.observe({ input_tokens: e.context })) {
+            emit(wi, "budget.exceeded", { role, model, context: e.context, limit: budget.limit }, spanId, `role:${role}`);
+          }
+          return;
+        }
+        emit(wi, "run.output", e, spanId, `role:${role}`);
+      },
     );
-    emit(wi, "run.finished", { role, model, ok: outcome.ok, error: outcome.error, turns: outcome.turns, tokens: outcome.tokens }, spanId, `role:${role}`);
+    emit(
+      wi,
+      "run.finished",
+      { role, model, ok: outcome.ok, error: outcome.error, turns: outcome.turns, tokens: outcome.tokens, peak_context: budget.peak, context_limit: budget.limit },
+      spanId,
+      `role:${role}`,
+    );
     if (!outcome.ok) return { ok: false, feedback: `Die Session ist fehlgeschlagen: ${outcome.error}` };
 
     const parsed = ROLE_OUTPUTS[role].safeParse(outcome.output);

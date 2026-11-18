@@ -8,7 +8,8 @@ import { checkEvidence, findHedges, validateClaims, validateFindings } from "../
 import { checkImplementerDiff, hashFiles } from "../src/integrity";
 import { loadGateProfile } from "../src/config";
 import { loadRouting, resolveModel } from "../src/routing";
-import { buildArgs, buildSettings, ClaudeRunner, parseJsonLoose } from "../src/runner/claude";
+import { buildArgs, buildSettings, ClaudeRunner, parseJsonLoose, SESSION_WINDOW_TOKENS } from "../src/runner/claude";
+import { ContextBudget, contextTokens } from "../src/budget";
 import { openStore } from "../src/store";
 
 const store = openStore(":memory:");
@@ -132,6 +133,13 @@ describe("ClaudeRunner", () => {
     expect(s.permissions.allow).toContain("Edit(//tmp/wt/**)");
   });
 
+  test("jede Session laeuft mit 200k-Fenster und automatischem Compact", () => {
+    const args = buildArgs(spec, "/tmp/s.json");
+    const i = args.indexOf("--autocompact");
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe("200000");
+  });
+
   test("Windows-Pfade bleiben in den Permission-Regeln erhalten (Laufwerk, Slashes)", () => {
     const winSpec = { ...spec, cwd: "C:\\Users\\dev\\proj" };
     const s = buildSettings(winSpec, false) as any;
@@ -194,5 +202,26 @@ describe("Git-Zeilenenden (Windows)", () => {
     writeFileSync(join(dir, "f.lua"), "x\n");
     await revertPaths(dir, "HEAD", ["f.lua"]);
     expect(hashFiles(dir, ["f.lua"])).toBe(locked);
+  });
+});
+
+describe("Token-Budget (Kontext je Session)", () => {
+  test("Kontextgroesse zaehlt Eingabe, Cache-Lesen und Cache-Schreiben, nicht die Ausgabe", () => {
+    expect(contextTokens({ input_tokens: 2, cache_read_input_tokens: 19858, cache_creation_input_tokens: 16126, output_tokens: 999 })).toBe(35_986);
+    expect(contextTokens({})).toBe(0);
+  });
+
+  test("Ueberschreitung wird genau einmal gemeldet, Peak wird mitgefuehrt", () => {
+    const b = new ContextBudget(200_000);
+    expect(b.observe({ input_tokens: 150_000 })).toBe(false);
+    expect(b.observe({ input_tokens: 210_000 })).toBe(true);
+    expect(b.observe({ input_tokens: 230_000 })).toBe(false);
+    expect(b.exceeded).toBe(true);
+    expect(b.peak).toBe(230_000);
+  });
+
+  test("Standardlimit ist 200k", () => {
+    expect(new ContextBudget().limit).toBe(200_000);
+    expect(new ContextBudget().limit).toBe(Number(SESSION_WINDOW_TOKENS));
   });
 });

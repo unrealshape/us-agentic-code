@@ -1,7 +1,11 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { contextTokens } from "../budget";
 import type { RunEvent, RunOutcome, RunSpec, Runner } from "./types";
+
+/** Kontextfenster je Session in Tokens, danach Auto-Compact. */
+export const SESSION_WINDOW_TOKENS = "200000";
 
 export interface ClaudeRunnerOptions {
   /** Pfad zum claude-Binary. */
@@ -35,6 +39,8 @@ export function buildSettings(spec: RunSpec, sandbox: boolean): object {
 
 export function buildArgs(spec: RunSpec, settingsPath: string, opts: ClaudeRunnerOptions = {}): string[] {
   const args = ["-p", spec.prompt, "--output-format", "stream-json", "--verbose", "--model", spec.model];
+  // Jede Session: 200k-Fenster, danach automatisch komprimieren (belegt: claude --help, Mindestwert 100k).
+  args.push("--autocompact", SESSION_WINDOW_TOKENS);
   args.push("--settings", settingsPath, "--permission-mode", "acceptEdits");
   if (spec.systemPrompt) args.push("--append-system-prompt", spec.systemPrompt);
   if (spec.schema) args.push("--json-schema", JSON.stringify(spec.schema));
@@ -91,6 +97,9 @@ export class ClaudeRunner implements Runner {
           for (const part of msg.message?.content ?? []) {
             if (part.type === "text") onEvent?.({ kind: "text", text: String(part.text).slice(0, 2000) });
             if (part.type === "tool_use") onEvent?.({ kind: "tool", text: `${part.name} ${JSON.stringify(part.input).slice(0, 500)}` });
+          }
+          if (msg.message?.usage) {
+            onEvent?.({ kind: "usage", text: "", context: contextTokens(msg.message.usage) });
           }
           if (spec.maxTurns && turns > spec.maxTurns && !killedReason) {
             killedReason = `Turn-Limit ${spec.maxTurns} ueberschritten`;

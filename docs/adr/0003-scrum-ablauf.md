@@ -1,0 +1,55 @@
+# ADR 0003: Scrum-Ablauf im Plugin (Entwurf)
+
+Status: **Entwurf**
+Datum: 2026-11-18
+Bezug: `docs/adr/0002-phase-1-entwurf.md`, Regel 5 aus `CLAUDE.md` (Orchestrator deterministisch)
+
+## Kontext
+
+Das Team arbeitet agil. Der Ablauf im Plugin soll die Scrum-Rollen und -Termine abbilden, damit Planung, Fortschritt und Rückblick nachvollziehbar sind. Dabei gilt Regel 5: Reihenfolge, Gates und Eskalation entscheidet Code, nie ein Modell.
+
+## Zuordnung der Rollen
+
+| Scrum | Im Plugin | Wer |
+|---|---|---|
+| Product Owner | du, über Freigaben (H1, H2, Spec) und Priorität im Backlog | Mensch |
+| Scrum Master | Orchestrator (deterministisch): Sprint-Grenzen, WIP-Limit, Eskalation | Code |
+| Entwicklungsteam | Agents (Analyst, Tech Lead, Implementer, Reviewer, …) | Modelle, nach `routing.yaml` |
+| Backlog | Work-Items im Store, sortiert nach deiner Priorität | Store |
+
+## Termine
+
+- **Sprint:** feste Zeitbox, Vorschlag 1 Woche. Ein Sprint endet auch, wenn das Kontingent den Schwellwert erreicht (ab 75 %, siehe ADR 0002). Länge ist konfigurierbar.
+- **Sprint-Planung:** Der Orchestrator zieht Work-Items aus dem Backlog, bis die Kapazität erreicht ist. Kapazität = Kontingent-Budget des Sprints, nicht Stunden. Du bestätigst den Sprint (Freigabe).
+- **Daily:** kein Meeting. Ein automatischer Statusbericht je Run aus dem Event-Log: erledigt, läuft, blockiert (Freigabe ausstehend oder Eskalation).
+- **Sprint-Review:** Du prüfst die gemergten PRs und die offenen Freigaben im UI.
+- **Retrospektive:** Die Learner-Rolle (Haiku) schlägt Lernregeln vor, aus Fehlversuchen und Eskalationen. Du entscheidest, ob sie übernommen werden. Keine Regel gilt ohne deine Freigabe.
+
+## Definition of Done
+
+Ein Work-Item ist fertig, wenn alle Punkte grün sind:
+
+1. Gates des Gate-Profils grün (Stufen 1 bis 2 in Phase 1, später mehr).
+2. Abnahmetests grün, gesperrte Tests unverändert (Hash-Prüfung).
+3. Code-Review ohne offene `critical`- oder `high`-Befunde.
+4. PR gemergt nach Freigabe H2.
+
+Die Prüfung ist mechanisch. Ein Modell darf nicht selbst erklären, dass etwas fertig ist.
+
+## Metriken (Vorbereitung für Phase 5)
+
+- Velocity: abgeschlossene Work-Items und Token-Verbrauch je Sprint.
+- Fehlversuche je Work-Item, Eskalationsrate.
+- Freigabe-Wartezeit (wie lange ein Run auf dich wartet).
+
+Die Metriken entstehen aus dem Event-Log. Es gibt keine zusätzlichen Datenquellen.
+
+## Entscheidungen, die noch offen sind
+
+1. Länge des Sprints: 1 Woche oder ein anderer Rhythmus?
+2. Wer legt Work-Items an: du direkt, oder der Analyst aus einer Idee?
+3. Dürfen Work-Items während eines laufenden Sprints in den Sprint wandern (Scope-Änderung)? Scrum sagt nein, es kann aber für Notfälle nötig sein.
+
+## Nicht in diesem Schritt
+
+Kein Code. Kein UI-Board. Das Board kommt mit UI v1 (Inbox und Agent-Wand), nicht als Jira-Ersatz.

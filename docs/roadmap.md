@@ -73,7 +73,13 @@ Später: Backup-Strategie und optionale Nutzung deines Servers.
 2. **Memory-Repo:** `usac-memory` privat, von Claude angelegt.
 3. **Modelle:** Fable nur für sehr komplexe Architekturaufgaben (Rolle `architect`). Opus steuert (Analyst, Tech Lead, Code-Reviewer, Security-Reviewer). Der Rest läuft auf Haiku und Sonnet. Umgesetzt in `routing.yaml` (Abschnitt `fable.only_roles`) und `packages/daemon/src/routing.ts`.
 
-Noch offen: Wer gibt die Fable-Freigabe ab 75 % Kontingent? Vorschlag: UI-Inbox, sobald Phase 1 steht.
+4. **Merge:** automatisch nach Freigabe H2 (ADR 0002, Abschnitt 3).
+5. **Kontingent:** Bezug ist das Abo Claude Max 20x (ADR 0002, Abschnitt 5).
+6. **Memory v1:** nur FTS5, ohne Embeddings.
+7. **spec/feature.md:** liegt im Ziel-Projekt.
+8. **Arbeitsweise:** agil nach Scrum, Zuordnung in ADR 0003 (Entwurf).
+
+Noch offen: Wer gibt die Fable-Freigabe ab 75 % Kontingent? Vorschlag: UI-Inbox, sobald Phase 1 steht. Offen in ADR 0003: Sprintlänge, Anlage der Work-Items, Scope-Änderungen im Sprint.
 
 ## Vorgehen je Phase
 

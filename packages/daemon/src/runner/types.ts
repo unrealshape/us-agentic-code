@@ -26,7 +26,7 @@ export interface RunOutcome {
   tokens?: { input: number; output: number };
 }
 
-export type RunEvent = { kind: "text" | "tool" | "info"; text: string };
+export type RunEvent = { kind: "text" | "tool" | "info" | "usage"; text: string; context?: number };
 
 export interface Runner {
   run(spec: RunSpec, onEvent?: (e: RunEvent) => void): Promise<RunOutcome>;
