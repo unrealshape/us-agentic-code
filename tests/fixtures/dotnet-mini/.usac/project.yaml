@@ -1,0 +1,4 @@
+name: dotnet-mini
+languages: [dotnet]
+gate_profile: dotnet
+base_branch: main

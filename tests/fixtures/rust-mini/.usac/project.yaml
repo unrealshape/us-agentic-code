@@ -1,0 +1,4 @@
+name: rust-mini
+languages: [rust]
+gate_profile: rust
+base_branch: main

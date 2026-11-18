@@ -1,0 +1,4 @@
+name: go-mini
+languages: [go]
+gate_profile: go
+base_branch: main

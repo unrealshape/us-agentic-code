@@ -1,0 +1,29 @@
+# Gate-Profil fuer Java-Projekte (nur Maven). Belege: docs/adr/0007-stack-profile.md
+# UNGEPRUEFT: mvn und java sind auf dem Entwicklungsrechner nicht installiert; alle Befehle stammen aus der Plan-Vorgabe.
+name: java
+detect: ["**/*.java", "pom.xml"]
+test_globs: ["src/test/**"]
+protected_globs: ["checkstyle.xml", "spotbugs-exclude.xml", ".mvn/**", ".editorconfig", ".usac/**", ".github/**"]
+skip_markers: ["@Disabled", "@Ignore"]
+
+# Maven Central; siehe ADR 0005.
+network_allow: ["repo.maven.apache.org", "repo1.maven.org"]
+
+acceptance:
+  # {stems_csv} = Klassennamen der Testdateien, kommagetrennt
+  run: "mvn -q test -Dtest={stems_csv}"
+  build_error_patterns: ["COMPILATION ERROR"]
+
+stages:
+  - name: format
+    run: "mvn -q spotless:check"
+    stage: 1
+    optional: true
+  - name: lint
+    run: "mvn -q verify -DskipTests"
+    stage: 1
+    optional: true
+  - name: unit
+    run: "mvn -q test"
+    stage: 1
+    optional: true

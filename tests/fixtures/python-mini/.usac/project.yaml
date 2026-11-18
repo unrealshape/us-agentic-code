@@ -1,0 +1,4 @@
+name: python-mini
+languages: [python]
+gate_profile: python
+base_branch: main

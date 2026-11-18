@@ -1,0 +1,28 @@
+# Gate-Profil fuer Go-Projekte. Belege: docs/adr/0007-stack-profile.md
+# UNGEPRUEFT: go ist auf dem Entwicklungsrechner nicht installiert; alle Befehle stammen aus der Plan-Vorgabe.
+name: go
+detect: ["**/*.go", "go.mod"]
+test_globs: ["**/*_test.go", "testdata/**"]
+protected_globs: [".golangci.yml", ".golangci.yaml", ".golangci.toml", ".usac/**", ".github/**"]
+skip_markers: ["t.Skip("]
+
+# Modul-Proxy; siehe ADR 0005.
+network_allow: ["proxy.golang.org", "sum.golang.org"]
+
+acceptance:
+  run: "go test {dirs}"
+  build_error_patterns: ["[[]build failed[]]", "[[]setup failed[]]", "undefined:", "cannot find package"]
+
+stages:
+  - name: format
+    run: 'test -z "$(gofmt -l .)"'
+    stage: 1
+    optional: true
+  - name: lint
+    run: "go vet ./..."
+    stage: 1
+    optional: true
+  - name: unit
+    run: "go test ./..."
+    stage: 1
+    optional: true

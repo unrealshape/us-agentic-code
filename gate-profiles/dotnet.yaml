@@ -1,0 +1,29 @@
+# Gate-Profil fuer .NET-Projekte (nur dotnet-CLI, kein MSBuild/Visual Studio). Belege: docs/adr/0007-stack-profile.md
+# UNGEPRUEFT: auf dem Entwicklungsrechner ist nur die dotnet-Runtime, kein SDK installiert; alle Befehle stammen aus der Plan-Vorgabe.
+name: dotnet
+detect: ["**/*.cs", "**/*.csproj"]
+test_globs: ["**/*Tests/**", "**/*.Tests/**", "tests/**", "test/**", "**/*Test.cs", "**/*Tests.cs"]
+protected_globs: [".editorconfig", "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "global.json", "nuget.config", ".usac/**", ".github/**"]
+skip_markers: ["Skip =", "[Ignore"]
+
+# Paket-Registry (NuGet); siehe ADR 0005.
+network_allow: ["api.nuget.org"]
+
+acceptance:
+  # {dotnet_filter} = FullyQualifiedName~A|FullyQualifiedName~B (Klassenname aus dem Dateinamen)
+  run: 'dotnet test --filter "{dotnet_filter}"'
+  build_error_patterns: ["error CS[0-9]+", "Build FAILED"]
+
+stages:
+  - name: format
+    run: "dotnet format --verify-no-changes"
+    stage: 1
+    optional: true
+  - name: lint
+    run: "dotnet build -warnaserror"
+    stage: 1
+    optional: true
+  - name: unit
+    run: "dotnet test"
+    stage: 1
+    optional: true

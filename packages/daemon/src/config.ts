@@ -47,7 +47,12 @@ export const GateProfile = z.object({
   protected_globs: z.array(z.string()).default([]),
   skip_markers: z.array(z.string()).default([]),
   network_allow: z.array(z.string()).default([]),
-  acceptance: z.object({ run: z.string(), timeout_ms: z.number().int().positive().default(120_000) }),
+  acceptance: z.object({
+    run: z.string(),
+    timeout_ms: z.number().int().positive().default(120_000),
+    /** Regex-Muster: trifft eines auf die Ausgabe eines roten Abnahmetests, ist es ein Build- statt Testfehler. */
+    build_error_patterns: z.array(z.string()).default([]),
+  }),
   stages: z.array(GateStage),
 });
 export type GateProfile = z.infer<typeof GateProfile>;

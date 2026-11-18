@@ -1,0 +1,4 @@
+name: java-mini
+languages: [java]
+gate_profile: java
+base_branch: main

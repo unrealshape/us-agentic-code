@@ -1,0 +1,29 @@
+# Gate-Profil fuer Rust-Projekte. Belege: docs/adr/0007-stack-profile.md
+# UNGEPRUEFT: cargo ist auf dem Entwicklungsrechner nicht installiert; alle Befehle stammen aus der Plan-Vorgabe.
+name: rust
+detect: ["**/*.rs", "Cargo.toml"]
+test_globs: ["tests/**", "benches/**"]
+protected_globs: ["rustfmt.toml", ".rustfmt.toml", "clippy.toml", ".clippy.toml", "rust-toolchain.toml", "rust-toolchain", ".cargo/**", ".usac/**", ".github/**"]
+skip_markers: ["#[ignore]"]
+
+# Crate-Registry; siehe ADR 0005.
+network_allow: ["crates.io", "index.crates.io", "static.crates.io"]
+
+acceptance:
+  # Eine Integrationstest-Datei je Aufruf: {stems} sind die Dateinamen unter tests/.
+  run: 'for t in {stems}; do cargo test --test "$t" || exit 1; done'
+  build_error_patterns: ["error[[]E", "could not compile"]
+
+stages:
+  - name: format
+    run: "cargo fmt --check"
+    stage: 1
+    optional: true
+  - name: lint
+    run: "cargo clippy -- -D warnings"
+    stage: 1
+    optional: true
+  - name: unit
+    run: "cargo test"
+    stage: 1
+    optional: true
