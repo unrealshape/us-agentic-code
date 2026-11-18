@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AcceptanceCriterion, AnalystOutput, Slice } from "@usac/shared";
+import type { Constitution, Rule } from "./rules";
 import type { WorkItem } from "./store";
 
 /** Liest den Rollen-Prompt aus agents/<rolle>.md (ohne Frontmatter). */
@@ -26,6 +27,20 @@ export const PRECISION_RULES = `Regeln fuer jede Aussage:
 export const GRAPH_NOTE = `Projektgraph: Im Projektordner liegt graphify-out/ (Graphify, tree-sitter). Nutze ihn vor dem Suchen im Code:
 - graphify query "<Begriff>"  ·  graphify path "A" "B"  ·  graphify explain "X"
 - Nur Kanten mit [EXTRACTED] gelten als Fakt; [INFERRED]/[AMBIGUOUS] musst du im Code pruefen.`;
+
+/**
+ * Verfassung fuer eine Rolle: Kernregeln plus die Teile, deren Rollen passen.
+ * Jede Regel traegt ihre ID, damit Aussagen und Befunde sie zitieren koennen.
+ */
+export function rulesBlock(c: Constitution, role: string): string {
+  const line = (r: Rule) => `- [${r.id}] ${r.text}`;
+  const parts = c.parts.filter((p) => p.rules.length > 0 && (p.roles === "all" || p.roles.includes(role)));
+  if (c.core.length === 0 && parts.length === 0) return "";
+  const out = [`Verfassung des Projekts (aus CLAUDE.md; nenne bei Bezug die Regel-ID):`];
+  if (c.core.length > 0) out.push(`Kern:\n${c.core.map(line).join("\n")}`);
+  for (const p of parts) out.push(`${p.name || "Allgemein"}:\n${p.rules.map(line).join("\n")}`);
+  return out.join("\n\n");
+}
 
 export function taskBlock(wi: WorkItem): string {
   return `Auftrag (${wi.type}, Groesse ${wi.size}): ${wi.title}\n\n${wi.description}`;
