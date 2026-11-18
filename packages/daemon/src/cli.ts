@@ -18,12 +18,13 @@ const HOME = process.env.USAC_HOME ?? join(homedir(), ".usac");
 const HELP = `US-AGENTIC-CODE (usac)
 
   usac init [pfad]                         Projekt einrichten (.usac/project.yaml, Graphify)
-  usac run <bugfix|feature> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,h2]
+  usac run <bugfix|feature> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1]
   usac resume <workitem-id>                Auftrag fortsetzen (z. B. nach Freigabe)
   usac status [workitem-id]                Auftraege und Status
   usac events <workitem-id> [--since n]    Event-Log eines Auftrags
   usac approve <freigabe-id> [--deny] [--note text]
   usac doctor                              Werkzeuge und Voraussetzungen pruefen
+  usac ui [--port 7777]                    UI (Inbox, Agent-Wand, Run-Detail) auf 127.0.0.1 starten
 `;
 
 function orchestrator(auto: string[] = []) {
@@ -91,7 +92,10 @@ async function main() {
       });
       const type = (positionals[0] ?? "bugfix") as WorkItemType;
       if (!values.title) throw new Error("Titel fehlt (-t)");
-      const { orch } = orchestrator(values.auto ? values.auto.split(",") : []);
+      const auto = values.auto ? values.auto.split(",").map((a) => a.trim()) : [];
+      // H2 (Merge in die Basis) erteilt immer ein Mensch.
+      if (auto.includes("h2")) throw new Error("--auto h2 ist nicht erlaubt: Die Freigabe H2 vor dem Merge erteilt immer ein Mensch (usac approve).");
+      const { orch } = orchestrator(auto);
       const wi = await orch.submit({
         projectPath: resolve(values.project!),
         type,
@@ -176,6 +180,13 @@ async function main() {
       console.log(`${token ? "ok  " : "--  "} CLAUDE_CODE_OAUTH_TOKEN ${token ? "gesetzt" : "nicht gesetzt (claude setup-token, oder interaktiv angemeldet)"}`);
       console.log(missing ? `\n${missing} Pflicht-Werkzeug(e) fehlen.` : "\nAlles bereit.");
       process.exit(missing ? 1 : 0);
+    }
+    case "ui": {
+      const { values } = parseArgs({ args: rest, options: { port: { type: "string", default: "7777" } } });
+      const { startServer } = await import("../../ui/src/server");
+      const server = startServer(openStore(join(HOME, "usac.db")), { port: Number(values.port) });
+      console.log(`UI laeuft: http://127.0.0.1:${server.port}/`);
+      break;
     }
     default:
       console.log(HELP);
