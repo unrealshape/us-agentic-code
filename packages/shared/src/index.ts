@@ -121,6 +121,8 @@ export const TechLeadOutput = z.object({
   claims: z.array(Claim).default([]),
   questions: z.array(z.string()).default([]),
 });
+export type Slice = z.infer<typeof Slice>;
+export type TechLeadOutput = z.infer<typeof TechLeadOutput>;
 
 export const ROLE_OUTPUTS = {
   analyst: AnalystOutput,
