@@ -57,6 +57,9 @@ export function checkEvidence(ev: Evidence, ctx: EvidenceContext): string | null
     }
     case "memory":
       return "Memory-Belege sind in Phase 0 noch nicht verfuegbar";
+    case "graph":
+      // Echte Pruefung folgt in Phase 3, Task 2 (graph.ts); bis dahin gilt ein Graph-Beleg als ungueltig.
+      return "Graph-Belege sind noch nicht pruefbar";
   }
 }
 

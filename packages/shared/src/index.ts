@@ -34,12 +34,26 @@ export const MemoryEvidence = z.object({
   id: z.string().min(1),
 });
 
+/** Fundstelle aus dem Graphify-Graph: Knoten plus pruefbare Quellstelle. */
+export const GraphEvidence = z.object({
+  type: z.literal("graph"),
+  node_id: z.string().min(1),
+  path: z.string().min(1),
+  /** Zeilenbereich [start, end], 1-basiert, inklusive. */
+  lines: z.tuple([z.number().int().positive(), z.number().int().positive()]),
+  /** Woertliches Zitat aus diesen Zeilen. */
+  quote: z.string().min(1),
+});
+export type GraphEvidence = z.infer<typeof GraphEvidence>;
+export type FileEvidence = z.infer<typeof FileEvidence>;
+
 export const Evidence = z.discriminatedUnion("type", [
   FileEvidence,
   GateEvidence,
   UrlEvidence,
   UserEvidence,
   MemoryEvidence,
+  GraphEvidence,
 ]);
 export type Evidence = z.infer<typeof Evidence>;
 
@@ -126,6 +140,46 @@ export type AnalystOutput = z.infer<typeof AnalystOutput>;
 export type Slice = z.infer<typeof Slice>;
 export type TechLeadOutput = z.infer<typeof TechLeadOutput>;
 
+export const ExplorerOutput = z.object({
+  summary: z.string(),
+  languages: z.array(z.string().min(1)).default([]),
+  commands: z.object({
+    build: z.string().optional(),
+    test: z.string().optional(),
+    lint: z.string().optional(),
+    format: z.string().optional(),
+  }),
+  /** Konventionen sind Aussagen mit Stufe; ohne Datei-Beleg zaehlen sie nicht. */
+  conventions: z.array(Claim).max(10).default([]),
+  claims: z.array(Claim).default([]),
+  questions: z.array(z.string()).default([]),
+});
+export type ExplorerOutput = z.infer<typeof ExplorerOutput>;
+
+export const InstinctProposal = z.object({
+  text: z.string().min(1),
+  role: z.string().min(1),
+  glob: z.string().min(1).optional(),
+  /** Ereignisse aus dem Event-Log, die den Vorschlag belegen. */
+  event_ids: z.array(z.number().int().positive()).min(1),
+});
+export type InstinctProposal = z.infer<typeof InstinctProposal>;
+
+export const MemoryProposal = z.object({
+  kind: z.string().min(1),
+  text: z.string().min(1),
+  evidence: z.array(FileEvidence).min(1),
+});
+export type MemoryProposal = z.infer<typeof MemoryProposal>;
+
+export const LearnerOutput = z.object({
+  summary: z.string(),
+  instincts: z.array(InstinctProposal).max(3).default([]),
+  memory: z.array(MemoryProposal).max(5).default([]),
+  claims: z.array(Claim).default([]),
+});
+export type LearnerOutput = z.infer<typeof LearnerOutput>;
+
 export const ROLE_OUTPUTS = {
   analyst: AnalystOutput,
   "tech-lead": TechLeadOutput,
@@ -133,6 +187,8 @@ export const ROLE_OUTPUTS = {
   implementer: ImplementerOutput,
   "code-reviewer": ReviewerOutput,
   "security-reviewer": ReviewerOutput,
+  explorer: ExplorerOutput,
+  learner: LearnerOutput,
 } as const;
 
 export type RoleWithOutput = keyof typeof ROLE_OUTPUTS;
@@ -158,7 +214,7 @@ export interface UsacEvent<T = unknown> {
 export const MODELS = ["haiku", "sonnet", "opus", "fable"] as const;
 export type Model = (typeof MODELS)[number];
 
-export type WorkItemType = "bugfix" | "feature" | "change" | "refactor";
+export type WorkItemType = "bugfix" | "feature" | "change" | "refactor" | "onboarding";
 export type WorkItemStatus =
   | "queued"
   | "running"

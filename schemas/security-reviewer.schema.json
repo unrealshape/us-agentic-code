@@ -105,6 +105,61 @@
                     }
                   },
                   "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "node_id",
+                    "path",
+                    "lines",
+                    "quote"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "graph"
+                    },
+                    "node_id": {
+                      "type": "string",
+                      "description": "Knoten-ID aus graphify-out/graph.json"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Quelldatei des Knotens, relativ zum Projektordner"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[start, ende], 1-basiert"
+                    },
+                    "quote": {
+                      "type": "string",
+                      "description": "woertliches Zitat aus diesen Zeilen"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "memory"
+                    },
+                    "id": {
+                      "type": "string",
+                      "description": "ID eines Memory-Eintrags"
+                    }
+                  },
+                  "additionalProperties": false
                 }
               ]
             }
@@ -199,6 +254,61 @@
                     },
                     "url": {
                       "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "node_id",
+                    "path",
+                    "lines",
+                    "quote"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "graph"
+                    },
+                    "node_id": {
+                      "type": "string",
+                      "description": "Knoten-ID aus graphify-out/graph.json"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Quelldatei des Knotens, relativ zum Projektordner"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[start, ende], 1-basiert"
+                    },
+                    "quote": {
+                      "type": "string",
+                      "description": "woertliches Zitat aus diesen Zeilen"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "memory"
+                    },
+                    "id": {
+                      "type": "string",
+                      "description": "ID eines Memory-Eintrags"
                     }
                   },
                   "additionalProperties": false

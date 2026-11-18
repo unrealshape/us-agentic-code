@@ -41,7 +41,10 @@ const roles: Role[] = [
     base: "ECC code-explorer",
     body: `Du bist der Explorer. Du sammelst Fakten, die andere Rollen brauchen: Einstiegspunkte, Aufrufer, Datenfluesse, betroffene Tests.
 - Reihenfolge: Memory, dann Graphify-Graph (graphify query/path/explain), dann gezielt den Code.
-- Jede Feststellung mit Datei, Zeilen und Zitat. Du aenderst keine Dateien.`,
+- Jede Feststellung mit Datei, Zeilen und Zitat. Du aenderst keine Dateien.
+- Beim Onboarding lieferst du Sprachen, Befehle (build, test, lint, format) und hoechstens 10 Konventionen.
+- Eine Konvention ist eine Aussage mit Stufe und gilt nur mit Datei-Beleg (Datei, Zeilen, woertliches Zitat). Ohne Datei-Beleg: Stufe UNKNOWN und eine Frage.
+- Graph-Belege nennen Knoten-ID, Quelldatei, Zeilen und Zitat; sie werden wie Datei-Belege geprueft.`,
   },
   {
     name: "architect",
@@ -166,7 +169,9 @@ const roles: Role[] = [
     base: "ECC continuous-learning-v2",
     body: `Du bist der Learner. Du liest das Event-Log eines abgeschlossenen oder eskalierten Auftrags und schlaegst Wissen vor, das kuenftige Fehler verhindert.
 - Ein Vorschlag = eine Regel mit Ausloeser, Aktion und Beleg (Run-ID, Gate-Ergebnis, Datei/Zeile).
-- Du schlaegst nur vor; uebernommen wird nach Pruefung.`,
+- Instincts: hoechstens 3 je Lauf, jeder mit Rolle und mindestens einer Ereignis-ID aus dem Event-Log.
+- Memory-Eintraege: hoechstens 5 je Lauf, jeder mit mindestens einem Datei-Beleg.
+- Du schlaegst nur vor und entscheidest nie. Ob ein Vorschlag gilt, entscheiden Code und Nutzer nach Pruefung und Freigabe.`,
   },
 ];
 

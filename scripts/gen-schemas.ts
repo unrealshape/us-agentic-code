@@ -30,8 +30,28 @@ const evidence = {
       properties: { type: { const: "url" }, url: { type: "string" } },
       additionalProperties: false,
     },
+    {
+      type: "object",
+      required: ["type", "node_id", "path", "lines", "quote"],
+      properties: {
+        type: { const: "graph" },
+        node_id: { type: "string", description: "Knoten-ID aus graphify-out/graph.json" },
+        path: { type: "string", description: "Quelldatei des Knotens, relativ zum Projektordner" },
+        lines: { type: "array", items: { type: "integer", minimum: 1 }, minItems: 2, maxItems: 2, description: "[start, ende], 1-basiert" },
+        quote: { type: "string", description: "woertliches Zitat aus diesen Zeilen" },
+      },
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      required: ["type", "id"],
+      properties: { type: { const: "memory" }, id: { type: "string", description: "ID eines Memory-Eintrags" } },
+      additionalProperties: false,
+    },
   ],
 };
+
+const fileEvidence = evidence.oneOf[0];
 
 const claim = {
   type: "object",
@@ -114,6 +134,66 @@ const schemas: Record<string, object> = {
     type: "object",
     required: ["summary", "changed_files", "claims"],
     properties: { summary: { type: "string" }, changed_files: { type: "array", items: { type: "string" } }, claims, questions },
+    additionalProperties: false,
+  },
+  explorer: {
+    type: "object",
+    required: ["summary", "languages", "commands", "conventions", "claims", "questions"],
+    properties: {
+      summary: { type: "string" },
+      languages: { type: "array", items: { type: "string" } },
+      commands: {
+        type: "object",
+        properties: {
+          build: { type: "string" },
+          test: { type: "string" },
+          lint: { type: "string" },
+          format: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      conventions: { type: "array", maxItems: 10, items: claim },
+      claims,
+      questions,
+    },
+    additionalProperties: false,
+  },
+  learner: {
+    type: "object",
+    required: ["summary", "instincts", "memory", "claims"],
+    properties: {
+      summary: { type: "string" },
+      instincts: {
+        type: "array",
+        maxItems: 3,
+        items: {
+          type: "object",
+          required: ["text", "role", "event_ids"],
+          properties: {
+            text: { type: "string" },
+            role: { type: "string" },
+            glob: { type: "string" },
+            event_ids: { type: "array", items: { type: "integer", minimum: 1 }, minItems: 1 },
+          },
+          additionalProperties: false,
+        },
+      },
+      memory: {
+        type: "array",
+        maxItems: 5,
+        items: {
+          type: "object",
+          required: ["kind", "text", "evidence"],
+          properties: {
+            kind: { type: "string" },
+            text: { type: "string" },
+            evidence: { type: "array", items: fileEvidence, minItems: 1 },
+          },
+          additionalProperties: false,
+        },
+      },
+      claims,
+    },
     additionalProperties: false,
   },
 };
