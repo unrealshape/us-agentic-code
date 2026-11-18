@@ -3,28 +3,35 @@ import { basename, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { z } from "zod";
 import { ROLE_OUTPUTS, type Model, type RoleWithOutput, type Size, type WorkItemType } from "@usac/shared";
-import { loadGateProfile, loadProjectProfile, matchesAny, type GateProfile } from "./config";
+import { loadGateProfile, loadProjectProfile, matchesAny, type GateProfile, type ProjectProfile } from "./config";
 import { ContextBudget } from "./budget";
 import { git } from "./exec";
 import { excludeFromGit, hasGraphify, updateGraph } from "./graph";
 import { validateClaims, validateFindings, type EvidenceError } from "./evidence";
 import { runAcceptance, runStages, summarize } from "./gates";
 import { changedFiles, checkImplementerDiff, hashFiles, revertPaths } from "./integrity";
+import { Escalate, getPhase, missingPhases, registerPhase, type Actor, type PhaseContext, type PhaseLimits } from "./phases";
 import { GRAPH_NOTE, implementerPrompt, reviewerPrompt, rolePrompt, roleSchema, testEngineerPrompt } from "./prompts";
+import { budgetUsedFraction, DEFAULT_MAX_TOKENS } from "./quota";
 import { loadRouting, resolveModel, type RoutingConfig } from "./routing";
 import type { Runner } from "./runner/types";
 import type { GateResult, Store, WorkItem } from "./store";
+import { loadWorkflow, type PhaseSpec, type Workflow } from "./workflow";
+
+export { Escalate } from "./phases";
 
 export interface OrchestratorOptions {
   store: Store;
   runner: Runner;
-  /** Wurzel des Plugins (agents/, schemas/, routing.yaml, gate-profiles/). */
+  /** Wurzel des Plugins (agents/, schemas/, routing.yaml, gate-profiles/, workflows/). */
   pluginRoot: string;
   /** ~/.usac oder ein Testordner; dort liegen Worktrees. */
   home: string;
   approvals?: { auto?: string[] };
-  /** Anteil des verbrauchten Kontingents (0..1). */
+  /** Anteil des verbrauchten Kontingents (0..1). Standard: Schaetzung aus run.finished-Events (quota.ts). */
   budgetUsed?: () => number;
+  /** Parameter der Standard-Schaetzung des Kontingents. */
+  quota?: { maxTokens?: number; windowMs?: number };
   /** Im Abo verfuegbare Modelle. */
   available?: Model[];
   limits?: Partial<Limits>;
@@ -33,13 +40,7 @@ export interface OrchestratorOptions {
   graphify?: boolean;
 }
 
-interface Limits {
-  acceptanceAttempts: number;
-  implementAttempts: number;
-  reviewAttempts: number;
-  maxTurns: number;
-  runTimeoutMs: number;
-}
+type Limits = PhaseLimits;
 
 const DEFAULT_LIMITS: Limits = {
   acceptanceAttempts: 2,
@@ -48,6 +49,9 @@ const DEFAULT_LIMITS: Limits = {
   maxTurns: 60,
   runTimeoutMs: 20 * 60_000,
 };
+
+/** Zeitfenster der Kontingent-Schaetzung (Annahme: Wochenlimit des Abos; siehe Bericht Task 4). */
+const DEFAULT_QUOTA_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
 export interface SubmitInput {
   projectPath: string;
@@ -63,10 +67,9 @@ export interface RunResult {
   reason?: string;
 }
 
-type Phase = "setup" | "acceptance" | "approve_h1" | "lock" | "implement" | "review" | "integrate" | "done";
-
-interface State {
-  phase: Phase;
+/** Zustand der Phase-0-Handler. `phase` ist ein Phasenname aus der Workflow-Datei oder "done". */
+type State = {
+  phase: string;
   acceptanceFiles?: string[];
   baseRef?: string;
   h1ApprovalId?: number;
@@ -74,22 +77,204 @@ interface State {
   lastFailure?: string;
   lastImplModel?: Model;
   reviewFeedback?: string;
+};
+
+const st = (ctx: PhaseContext, wi: WorkItem) => ctx.state(wi) as State;
+
+// ---- Eingebaute Phasen ------------------------------------------------------------------
+// Ein Handler laesst `phase` unveraendert, um zur naechsten Phase der Workflow-Datei zu gehen
+// (Vertrag siehe PhaseContext in phases.ts).
+
+registerPhase("setup", async (wi, ctx) => {
+  const { profile, home } = ctx;
+  const branch = `usac/${wi.id}`;
+  const dir = join(home, "worktrees", profile.name, wi.id);
+  mkdirSync(join(home, "worktrees", profile.name), { recursive: true });
+  if (!existsSync(dir)) await git(wi.projectPath, "worktree", "add", "-q", "-b", branch, dir, profile.base_branch);
+  // Erzeugte Artefakte gehoeren nie in einen Commit.
+  await excludeFromGit(dir, ["graphify-out/", "luacov.stats.out", "luacov.report.out"]);
+  wi = ctx.save(wi, {}, { branch, worktree: dir });
+  ctx.emit(wi, "worktree.created", { branch, path: dir, base: profile.base_branch });
+  if (ctx.graphify !== false && (await hasGraphify())) {
+    const g = await updateGraph(dir);
+    ctx.emit(wi, g.ok ? "graph.updated" : "graph.failed", { nodes: g.nodes, edges: g.edges, output: g.ok ? undefined : g.output });
+  } else {
+    ctx.emit(wi, "graph.skipped", { reason: ctx.graphify === false ? "abgeschaltet" : "graphify nicht installiert" });
+  }
+  return wi;
+});
+
+registerPhase("acceptance", async (wi, ctx) => {
+  const gp = ctx.gateProfile;
+  let feedback: string | undefined;
+  for (let attempt = 1; attempt <= ctx.limits.acceptanceAttempts; attempt++) {
+    const base = await git(wi.worktree!, "rev-parse", "HEAD");
+    const route = resolveModel(ctx.routing, "test-engineer", {
+      variant: ctx.spec.variant ?? "acceptance",
+      size: wi.size,
+      budgetUsed: ctx.budgetUsed(),
+      available: ctx.available,
+    });
+    const res = await ctx.runRole(wi, "test-engineer", route.model, testEngineerPrompt(wi, feedback));
+    if (!res.ok) {
+      feedback = res.feedback;
+      continue;
+    }
+    const files = res.output.acceptance_tests;
+    // Der Test Engineer darf nur Testdateien anfassen.
+    const nonTest = (await changedFiles(wi.worktree!, base)).filter((p) => !matchesAny(p, gp.test_globs));
+    const missing = files.filter((f) => !existsSync(join(wi.worktree!, f)) || !matchesAny(f, gp.test_globs));
+    if (nonTest.length || missing.length) {
+      if (nonTest.length) await revertPaths(wi.worktree!, base, nonTest);
+      ctx.emit(wi, "anticheat.violation", { role: "test-engineer", nonTest, missing });
+      feedback = `Nur Testdateien sind erlaubt. Verworfen: ${nonTest.join(", ") || "-"}. Fehlende oder ungueltige Testpfade: ${missing.join(", ") || "-"}`;
+      continue;
+    }
+    const gate = await runAcceptance(ctx.store, wi.id, gp, wi.worktree!, files);
+    gateEvents(ctx, wi, [gate]);
+    if (gate.status === "passed") {
+      ctx.emit(wi, "acceptance.rejected", { reason: "Abnahmetest ist ohne Aenderung schon gruen und beweist nichts", files });
+      await revertPaths(wi.worktree!, base, await changedFiles(wi.worktree!, base));
+      feedback = "Dein Abnahmetest war sofort gruen. Er muss das fehlende Verhalten beweisen und daher mit dem aktuellen Code rot sein.";
+      continue;
+    }
+    ctx.emit(wi, "acceptance.red", { gate_result_id: gate.id, files });
+    return ctx.save(wi, { acceptanceFiles: files });
+  }
+  throw new Escalate("Kein brauchbarer Abnahmetest nach " + ctx.limits.acceptanceAttempts + " Versuchen");
+});
+
+registerPhase("approve_h1", async (wi, ctx) => {
+  const { store } = ctx;
+  const s = st(ctx, wi);
+  let approval = s.h1ApprovalId ? store.getApproval(s.h1ApprovalId) : null;
+  if (!approval) {
+    approval = store.createApproval(wi.id, "h1", { files: s.acceptanceFiles, title: wi.title });
+    ctx.emit(wi, "approval.requested", { approval_id: approval.id, kind: "h1", files: s.acceptanceFiles });
+    wi = ctx.save(wi, { h1ApprovalId: approval.id });
+    if (ctx.autoApprovals.has("h1")) {
+      store.resolveApproval(approval.id, true, "automatisch (Konfiguration)");
+      approval = store.getApproval(approval.id)!;
+    }
+  }
+  if (approval.status === "pending") return ctx.save(wi, {}, { status: "awaiting_approval" });
+  if (approval.status === "denied") throw new Escalate(`Abnahmetest abgelehnt: ${approval.note ?? ""}`);
+  ctx.emit(wi, "approval.granted", { approval_id: approval.id, kind: "h1" });
+  return ctx.save(wi, {}, { status: "running" });
+});
+
+registerPhase("lock", async (wi, ctx) => {
+  const files = st(ctx, wi).acceptanceFiles!;
+  const hash = hashFiles(wi.worktree!, files);
+  ctx.store.saveLock(wi.id, files, hash);
+  await git(wi.worktree!, "add", "--", ...files);
+  const sha = await ctx.commit(wi.worktree!, `test: Abnahmetest fuer "${wi.title}"\n\nUsac-Trace: ${wi.id}`);
+  ctx.emit(wi, "test.locked", { files, hash, commit: sha });
+  return ctx.save(wi, { baseRef: sha, implFailures: 0 });
+});
+
+registerPhase("implement", async (wi, ctx) => {
+  const gp = ctx.gateProfile;
+  let s = st(ctx, wi);
+  const lockInfo = ctx.store.getLock(wi.id)!;
+  while ((s.implFailures ?? 0) < ctx.limits.implementAttempts) {
+    const failures = s.implFailures ?? 0;
+    const route = resolveModel(ctx.routing, "implementer", { size: wi.size, failures, budgetUsed: ctx.budgetUsed(), available: ctx.available });
+    if (s.lastImplModel && s.lastImplModel !== route.model) {
+      ctx.emit(wi, "model.escalated", { role: "implementer", from: s.lastImplModel, to: route.model, reasons: route.reasons });
+    }
+    const res = await ctx.runRole(wi, "implementer", route.model, implementerPrompt(wi, lockInfo.files, s.lastFailure));
+    let failure: string | null = null;
+    if (!res.ok) failure = res.feedback;
+
+    const violations = await checkImplementerDiff(wi.worktree!, s.baseRef!, gp, lockInfo.files);
+    if (violations.length) {
+      ctx.emit(wi, "anticheat.violation", { role: "implementer", violations });
+      await revertPaths(wi.worktree!, s.baseRef!, violations.map((v) => v.path));
+      failure = `Verstoesse wurden verworfen: ${violations.map((v) => `${v.path} (${v.reason})`).join(", ")}`;
+    }
+    if (hashFiles(wi.worktree!, lockInfo.files) !== lockInfo.hash) {
+      await revertPaths(wi.worktree!, s.baseRef!, lockInfo.files);
+      failure = (failure ? failure + "\n" : "") + "Gesperrter Abnahmetest wurde veraendert und zurueckgesetzt.";
+    }
+
+    if (!failure) {
+      const stages = await runStages(ctx.store, wi.id, gp, wi.worktree!, 2);
+      const acc = await runAcceptance(ctx.store, wi.id, gp, wi.worktree!, lockInfo.files);
+      const all = summarize([...stages.results, acc]);
+      gateEvents(ctx, wi, all.results);
+      if (all.passed) {
+        ctx.emit(wi, "acceptance.green", { gate_result_id: acc.id, model: route.model, attempt: failures + 1 });
+        return ctx.save(wi, { lastFailure: undefined, lastImplModel: route.model });
+      }
+      failure = all.failureOutput;
+    }
+    s = st(ctx, ctx.save(wi, { implFailures: failures + 1, lastFailure: failure!, lastImplModel: route.model }));
+    wi = ctx.store.getWorkItem(wi.id)!;
+  }
+  throw new Escalate(`Implementierung nach ${ctx.limits.implementAttempts} Versuchen nicht gruen`);
+});
+
+registerPhase("review", async (wi, ctx) => {
+  let feedback: string | undefined;
+  for (let attempt = 1; attempt <= ctx.limits.reviewAttempts; attempt++) {
+    // Reviewer sieht nur den Diff gegen den gesperrten Stand.
+    const s = st(ctx, wi);
+    await git(wi.worktree!, "add", "-A");
+    const diff = await git(wi.worktree!, "diff", "--cached", s.baseRef!);
+    const route = resolveModel(ctx.routing, "code-reviewer", { size: wi.size, budgetUsed: ctx.budgetUsed(), available: ctx.available });
+    const res = await ctx.runRole(wi, "code-reviewer", route.model, reviewerPrompt(wi, diff, feedback));
+    if (!res.ok) {
+      feedback = res.feedback;
+      continue;
+    }
+    const blocking = res.output.findings.filter((f) => f.severity === "critical" || f.severity === "high");
+    if (res.output.verdict === "approve" && blocking.length === 0) {
+      ctx.emit(wi, "review.approved", { model: route.model, findings: res.output.findings.length });
+      return wi;
+    }
+    ctx.emit(wi, "review.changes_requested", { findings: res.output.findings });
+    // Zurueck zur Implementierung mit den Befunden als Rueckmeldung.
+    return ctx.save(wi, {
+      phase: "implement",
+      lastFailure: "Review-Befunde:\n" + res.output.findings.map((f) => `- [${f.severity}] ${f.text}`).join("\n"),
+    });
+  }
+  throw new Escalate("Review lieferte keine gueltige Ausgabe");
+});
+
+registerPhase("integrate", async (wi, ctx) => {
+  await git(wi.worktree!, "add", "-A");
+  const prefix = wi.type === "bugfix" ? "fix" : wi.type === "feature" ? "feat" : wi.type === "refactor" ? "refactor" : "chore";
+  const sha = await ctx.commit(wi.worktree!, `${prefix}: ${wi.title}\n\nUsac-Trace: ${wi.id}`);
+  ctx.emit(wi, "integrated", { branch: wi.branch, commit: sha });
+  wi = ctx.save(wi, { phase: "done" }, { status: "done" });
+  ctx.emit(wi, "workitem.done", { branch: wi.branch, commit: sha });
+  return wi;
+});
+
+function gateEvents(ctx: PhaseContext, wi: WorkItem, results: GateResult[]) {
+  for (const r of results) ctx.emit(wi, `gate.${r.status}`, { gate_result_id: r.id, name: r.name, exitCode: r.exitCode, durationMs: r.durationMs });
 }
 
-class Escalate extends Error {}
+// ---- Orchestrator -----------------------------------------------------------------------
 
 export function createOrchestrator(opts: OrchestratorOptions) {
   const { store, runner, pluginRoot, home } = opts;
   const limits: Limits = { ...DEFAULT_LIMITS, ...opts.limits };
   const routing: RoutingConfig = loadRouting(pluginRoot);
   const auto = new Set(opts.approvals?.auto ?? []);
+  const budgetUsed =
+    opts.budgetUsed ??
+    (() =>
+      budgetUsedFraction(
+        store,
+        new Date(Date.now() - (opts.quota?.windowMs ?? DEFAULT_QUOTA_WINDOW_MS)),
+        opts.quota?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ).fraction);
 
-  function emit(wi: WorkItem, type: string, data: unknown = {}, spanId = wi.id, actor: `role:${string}` | "orchestrator" = "orchestrator") {
+  function emit(wi: WorkItem, type: string, data: unknown = {}, spanId = wi.id, actor: Actor = "orchestrator") {
     return store.append({ traceId: wi.id, spanId, parentSpanId: spanId === wi.id ? null : wi.id, project: basename(wi.projectPath), type, actor, data });
-  }
-
-  function gateEvents(wi: WorkItem, results: GateResult[]) {
-    for (const r of results) emit(wi, `gate.${r.status}`, { gate_result_id: r.id, name: r.name, exitCode: r.exitCode, durationMs: r.durationMs });
   }
 
   function state(wi: WorkItem): State {
@@ -99,6 +284,12 @@ export function createOrchestrator(opts: OrchestratorOptions) {
   function save(wi: WorkItem, patch: Partial<State>, extra: Partial<Pick<WorkItem, "status" | "branch" | "worktree">> = {}): WorkItem {
     store.updateWorkItem(wi.id, { ...extra, state: { ...state(wi), ...patch } });
     return store.getWorkItem(wi.id)!;
+  }
+
+  /** Workflow-Datei zum Auftragstyp; Typen ohne eigene Datei laufen wie bisher als bugfix. */
+  function workflowFor(type: WorkItemType): Workflow {
+    const own = join(pluginRoot, "workflows", `${type}.yaml`);
+    return loadWorkflow(existsSync(own) ? own : join(pluginRoot, "workflows", "bugfix.yaml"));
   }
 
   /** Startet eine Rolle, validiert Schema und Belege. Ungueltige Ausgaben gelten als Fehlversuch. */
@@ -169,168 +360,29 @@ export function createOrchestrator(opts: OrchestratorOptions) {
     return git(cwd, "rev-parse", "HEAD");
   }
 
-  // ---- Phasen ----------------------------------------------------------------------
-
-  async function setup(wi: WorkItem, profile: { base_branch: string; name: string }): Promise<WorkItem> {
-    const branch = `usac/${wi.id}`;
-    const dir = join(home, "worktrees", profile.name, wi.id);
-    mkdirSync(join(home, "worktrees", profile.name), { recursive: true });
-    if (!existsSync(dir)) await git(wi.projectPath, "worktree", "add", "-q", "-b", branch, dir, profile.base_branch);
-    // Erzeugte Artefakte gehoeren nie in einen Commit.
-    await excludeFromGit(dir, ["graphify-out/", "luacov.stats.out", "luacov.report.out"]);
-    wi = save(wi, { phase: "acceptance" }, { branch, worktree: dir });
-    emit(wi, "worktree.created", { branch, path: dir, base: profile.base_branch });
-    if (opts.graphify !== false && (await hasGraphify())) {
-      const g = await updateGraph(dir);
-      emit(wi, g.ok ? "graph.updated" : "graph.failed", { nodes: g.nodes, edges: g.edges, output: g.ok ? undefined : g.output });
-    } else {
-      emit(wi, "graph.skipped", { reason: opts.graphify === false ? "abgeschaltet" : "graphify nicht installiert" });
-    }
-    return wi;
-  }
-
-  async function acceptance(wi: WorkItem, gp: GateProfile): Promise<WorkItem> {
-    let feedback: string | undefined;
-    for (let attempt = 1; attempt <= limits.acceptanceAttempts; attempt++) {
-      const base = await git(wi.worktree!, "rev-parse", "HEAD");
-      const route = resolveModel(routing, "test-engineer", { variant: "acceptance", size: wi.size, budgetUsed: opts.budgetUsed?.(), available: opts.available });
-      const res = await runRole(wi, "test-engineer", route.model, testEngineerPrompt(wi, feedback));
-      if (!res.ok) {
-        feedback = res.feedback;
-        continue;
-      }
-      const files = res.output.acceptance_tests;
-      // Der Test Engineer darf nur Testdateien anfassen.
-      const nonTest = (await changedFiles(wi.worktree!, base)).filter((p) => !matchesAny(p, gp.test_globs));
-      const missing = files.filter((f) => !existsSync(join(wi.worktree!, f)) || !matchesAny(f, gp.test_globs));
-      if (nonTest.length || missing.length) {
-        if (nonTest.length) await revertPaths(wi.worktree!, base, nonTest);
-        emit(wi, "anticheat.violation", { role: "test-engineer", nonTest, missing });
-        feedback = `Nur Testdateien sind erlaubt. Verworfen: ${nonTest.join(", ") || "-"}. Fehlende oder ungueltige Testpfade: ${missing.join(", ") || "-"}`;
-        continue;
-      }
-      const gate = await runAcceptance(store, wi.id, gp, wi.worktree!, files);
-      gateEvents(wi, [gate]);
-      if (gate.status === "passed") {
-        emit(wi, "acceptance.rejected", { reason: "Abnahmetest ist ohne Aenderung schon gruen und beweist nichts", files });
-        await revertPaths(wi.worktree!, base, await changedFiles(wi.worktree!, base));
-        feedback = "Dein Abnahmetest war sofort gruen. Er muss das fehlende Verhalten beweisen und daher mit dem aktuellen Code rot sein.";
-        continue;
-      }
-      emit(wi, "acceptance.red", { gate_result_id: gate.id, files });
-      return save(wi, { phase: "approve_h1", acceptanceFiles: files });
-    }
-    throw new Escalate("Kein brauchbarer Abnahmetest nach " + limits.acceptanceAttempts + " Versuchen");
-  }
-
-  function approveH1(wi: WorkItem): WorkItem | null {
-    const st = state(wi);
-    let approval = st.h1ApprovalId ? store.getApproval(st.h1ApprovalId) : null;
-    if (!approval) {
-      approval = store.createApproval(wi.id, "h1", { files: st.acceptanceFiles, title: wi.title });
-      emit(wi, "approval.requested", { approval_id: approval.id, kind: "h1", files: st.acceptanceFiles });
-      wi = save(wi, { h1ApprovalId: approval.id });
-      if (auto.has("h1")) {
-        store.resolveApproval(approval.id, true, "automatisch (Konfiguration)");
-        approval = store.getApproval(approval.id)!;
-      }
-    }
-    if (approval.status === "pending") {
-      save(wi, {}, { status: "awaiting_approval" });
-      return null;
-    }
-    if (approval.status === "denied") throw new Escalate(`Abnahmetest abgelehnt: ${approval.note ?? ""}`);
-    emit(wi, "approval.granted", { approval_id: approval.id, kind: "h1" });
-    return save(wi, { phase: "lock" }, { status: "running" });
-  }
-
-  async function lock(wi: WorkItem): Promise<WorkItem> {
-    const files = state(wi).acceptanceFiles!;
-    const hash = hashFiles(wi.worktree!, files);
-    store.saveLock(wi.id, files, hash);
-    await git(wi.worktree!, "add", "--", ...files);
-    const sha = await commit(wi.worktree!, `test: Abnahmetest fuer "${wi.title}"\n\nUsac-Trace: ${wi.id}`);
-    emit(wi, "test.locked", { files, hash, commit: sha });
-    return save(wi, { phase: "implement", baseRef: sha, implFailures: 0 });
-  }
-
-  async function implement(wi: WorkItem, gp: GateProfile): Promise<WorkItem> {
-    let st = state(wi);
-    const lockInfo = store.getLock(wi.id)!;
-    while ((st.implFailures ?? 0) < limits.implementAttempts) {
-      const failures = st.implFailures ?? 0;
-      const route = resolveModel(routing, "implementer", { size: wi.size, failures, budgetUsed: opts.budgetUsed?.(), available: opts.available });
-      if (st.lastImplModel && st.lastImplModel !== route.model) {
-        emit(wi, "model.escalated", { role: "implementer", from: st.lastImplModel, to: route.model, reasons: route.reasons });
-      }
-      const res = await runRole(wi, "implementer", route.model, implementerPrompt(wi, lockInfo.files, st.lastFailure));
-      let failure: string | null = null;
-      if (!res.ok) failure = res.feedback;
-
-      const violations = await checkImplementerDiff(wi.worktree!, st.baseRef!, gp, lockInfo.files);
-      if (violations.length) {
-        emit(wi, "anticheat.violation", { role: "implementer", violations });
-        await revertPaths(wi.worktree!, st.baseRef!, violations.map((v) => v.path));
-        failure = `Verstoesse wurden verworfen: ${violations.map((v) => `${v.path} (${v.reason})`).join(", ")}`;
-      }
-      if (hashFiles(wi.worktree!, lockInfo.files) !== lockInfo.hash) {
-        await revertPaths(wi.worktree!, st.baseRef!, lockInfo.files);
-        failure = (failure ? failure + "\n" : "") + "Gesperrter Abnahmetest wurde veraendert und zurueckgesetzt.";
-      }
-
-      if (!failure) {
-        const stages = await runStages(store, wi.id, gp, wi.worktree!, 2);
-        const acc = await runAcceptance(store, wi.id, gp, wi.worktree!, lockInfo.files);
-        const all = summarize([...stages.results, acc]);
-        gateEvents(wi, all.results);
-        if (all.passed) {
-          emit(wi, "acceptance.green", { gate_result_id: acc.id, model: route.model, attempt: failures + 1 });
-          return save(wi, { phase: "review", lastFailure: undefined, lastImplModel: route.model });
-        }
-        failure = all.failureOutput;
-      }
-      st = state(save(wi, { implFailures: failures + 1, lastFailure: failure!, lastImplModel: route.model }));
-      wi = store.getWorkItem(wi.id)!;
-    }
-    throw new Escalate(`Implementierung nach ${limits.implementAttempts} Versuchen nicht gruen`);
-  }
-
-  async function review(wi: WorkItem): Promise<WorkItem> {
-    let feedback: string | undefined;
-    for (let attempt = 1; attempt <= limits.reviewAttempts; attempt++) {
-      // Reviewer sieht nur den Diff gegen den gesperrten Stand.
-      const st = state(wi);
-      await git(wi.worktree!, "add", "-A");
-      const diff = await git(wi.worktree!, "diff", "--cached", st.baseRef!);
-      const route = resolveModel(routing, "code-reviewer", { size: wi.size, budgetUsed: opts.budgetUsed?.(), available: opts.available });
-      const res = await runRole(wi, "code-reviewer", route.model, reviewerPrompt(wi, diff, feedback));
-      if (!res.ok) {
-        feedback = res.feedback;
-        continue;
-      }
-      const blocking = res.output.findings.filter((f) => f.severity === "critical" || f.severity === "high");
-      if (res.output.verdict === "approve" && blocking.length === 0) {
-        emit(wi, "review.approved", { model: route.model, findings: res.output.findings.length });
-        return save(wi, { phase: "integrate" });
-      }
-      emit(wi, "review.changes_requested", { findings: res.output.findings });
-      // Zurueck zur Implementierung mit den Befunden als Rueckmeldung.
-      return save(wi, {
-        phase: "implement",
-        lastFailure: "Review-Befunde:\n" + res.output.findings.map((f) => `- [${f.severity}] ${f.text}`).join("\n"),
-      });
-    }
-    throw new Escalate("Review lieferte keine gueltige Ausgabe");
-  }
-
-  async function integrate(wi: WorkItem): Promise<WorkItem> {
-    await git(wi.worktree!, "add", "-A");
-    const prefix = wi.type === "bugfix" ? "fix" : wi.type === "feature" ? "feat" : wi.type === "refactor" ? "refactor" : "chore";
-    const sha = await commit(wi.worktree!, `${prefix}: ${wi.title}\n\nUsac-Trace: ${wi.id}`);
-    emit(wi, "integrated", { branch: wi.branch, commit: sha });
-    wi = save(wi, { phase: "done" }, { status: "done" });
-    emit(wi, "workitem.done", { branch: wi.branch, commit: sha });
-    return wi;
+  function context(spec: PhaseSpec, workflow: Workflow, profile: ProjectProfile, gateProfile: GateProfile): PhaseContext {
+    return {
+      spec,
+      workflow,
+      store,
+      runner,
+      pluginRoot,
+      home,
+      profile,
+      gateProfile,
+      limits,
+      routing,
+      autoApprovals: auto,
+      available: opts.available,
+      graphify: opts.graphify,
+      urlAllowlist: opts.urlAllowlist,
+      budgetUsed,
+      emit,
+      state,
+      save,
+      runRole,
+      commit,
+    };
   }
 
   // ---- Oeffentliche API ----------------------------------------------------------------
@@ -361,19 +413,30 @@ export function createOrchestrator(opts: OrchestratorOptions) {
       const profile = loadProjectProfile(wi.projectPath);
       const gp = loadGateProfile(pluginRoot, profile.gate_profile);
       try {
+        const workflow = workflowFor(wi.type);
+        // Unbekannte Phasen brechen vor dem Start ab, statt still uebersprungen zu werden.
+        const missing = missingPhases(workflow);
+        if (missing.length) {
+          throw new Error(
+            `Workflow "${workflow.name}": kein Handler fuer Phase ${missing.map((n) => `"${n}"`).join(", ")} (registerPhase fehlt)`,
+          );
+        }
         for (;;) {
-          const phase = state(wi).phase;
-          if (phase === "setup") wi = await setup(wi, profile);
-          else if (phase === "acceptance") wi = await acceptance(wi, gp);
-          else if (phase === "approve_h1") {
-            const next = approveH1(wi);
-            if (!next) return { status: "awaiting_approval", branch: wi.branch };
-            wi = next;
-          } else if (phase === "lock") wi = await lock(wi);
-          else if (phase === "implement") wi = await implement(wi, gp);
-          else if (phase === "review") wi = await review(wi);
-          else if (phase === "integrate") wi = await integrate(wi);
-          else break;
+          const current: string = (wi.state as Partial<State> | null)?.phase ?? workflow.phases[0]!.name;
+          if (current === "done") break;
+          const idx = workflow.phases.findIndex((p) => p.name === current);
+          if (idx < 0) throw new Error(`Phase "${current}" steht nicht im Workflow "${workflow.name}"`);
+          wi = await getPhase(current)!(wi, context(workflow.phases[idx]!, workflow, profile, gp));
+          if (wi.status === "awaiting_approval") return { status: "awaiting_approval", branch: wi.branch };
+          if (wi.status === "done") break;
+          if (state(wi).phase !== current) continue; // Sprung, z. B. review -> implement
+          const next = workflow.phases[idx + 1];
+          if (next) {
+            wi = save(wi, { phase: next.name });
+          } else {
+            wi = save(wi, { phase: "done" }, { status: "done" });
+            emit(wi, "workitem.done", { branch: wi.branch });
+          }
         }
         return { status: wi.status, branch: wi.branch };
       } catch (err) {
