@@ -2,12 +2,21 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { parseProtectorMode } from "./hook-log";
+
+export { parseProtectorMode, type ProtectorMode } from "./hook-log";
 
 export const ProjectProfile = z.object({
   name: z.string(),
   languages: z.array(z.string()).default([]),
   gate_profile: z.string(),
   base_branch: z.string().default("main"),
+  // Tippfehler im Modus fuehren zu `blockieren`, nicht zu einem Parse-Fehler.
+  protector: z
+    .object({ mode: z.unknown().transform(parseProtectorMode) })
+    .default({ mode: "blockieren" }),
+  gateguard: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+  network: z.object({ allow: z.array(z.string()).default([]) }).default({ allow: [] }),
 });
 export type ProjectProfile = z.infer<typeof ProjectProfile>;
 
@@ -26,6 +35,7 @@ export const GateProfile = z.object({
   test_globs: z.array(z.string()).default([]),
   protected_globs: z.array(z.string()).default([]),
   skip_markers: z.array(z.string()).default([]),
+  network_allow: z.array(z.string()).default([]),
   acceptance: z.object({ run: z.string(), timeout_ms: z.number().int().positive().default(120_000) }),
   stages: z.array(GateStage),
 });
