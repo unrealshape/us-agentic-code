@@ -48,6 +48,62 @@ const claims = { type: "array", items: claim };
 const questions = { type: "array", items: { type: "string" } };
 
 const schemas: Record<string, object> = {
+  analyst: {
+    type: "object",
+    required: ["summary", "title", "criteria", "claims"],
+    properties: {
+      summary: { type: "string" },
+      title: { type: "string" },
+      criteria: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          required: ["id", "given", "when", "then", "source"],
+          properties: {
+            id: { type: "string", pattern: "^AC-\\d+$" },
+            given: { type: "string" },
+            when: { type: "string" },
+            then: { type: "string" },
+            source: { enum: ["task", "code", "user"] },
+          },
+          additionalProperties: false,
+        },
+      },
+      out_of_scope: { type: "array", items: { type: "string" } },
+      claims,
+      questions,
+    },
+    additionalProperties: false,
+  },
+  "tech-lead": {
+    type: "object",
+    required: ["summary", "size", "slices", "claims"],
+    properties: {
+      summary: { type: "string" },
+      size: { enum: ["trivial", "small", "standard", "large"] },
+      slices: {
+        type: "array",
+        minItems: 1,
+        maxItems: 8,
+        items: {
+          type: "object",
+          required: ["id", "title", "criteria", "files"],
+          properties: {
+            id: { type: "string", pattern: "^S\\d+$" },
+            title: { type: "string" },
+            criteria: { type: "array", items: { type: "string" }, minItems: 1 },
+            files: { type: "array", items: { type: "string" }, minItems: 1 },
+            depends_on: { type: "array", items: { type: "string" } },
+          },
+          additionalProperties: false,
+        },
+      },
+      claims,
+      questions,
+    },
+    additionalProperties: false,
+  },
   "test-engineer": {
     type: "object",
     required: ["summary", "acceptance_tests", "claims"],

@@ -86,7 +86,45 @@ export const ReviewerOutput = z.object({
   claims: z.array(Claim).default([]),
 });
 
+export const SizeSchema = z.enum(["trivial", "small", "standard", "large"]);
+export type Size = z.infer<typeof SizeSchema>;
+
+export const AcceptanceCriterion = z.object({
+  id: z.string().regex(/^AC-\d+$/),
+  given: z.string(),
+  when: z.string(),
+  then: z.string(),
+  source: z.enum(["task", "code", "user"]),
+});
+
+export const AnalystOutput = z.object({
+  summary: z.string(),
+  title: z.string(),
+  criteria: z.array(AcceptanceCriterion).min(1),
+  out_of_scope: z.array(z.string()).default([]),
+  claims: z.array(Claim).default([]),
+  questions: z.array(z.string()).default([]),
+});
+
+export const Slice = z.object({
+  id: z.string().regex(/^S\d+$/),
+  title: z.string(),
+  criteria: z.array(z.string()).min(1),
+  files: z.array(z.string()).min(1),
+  depends_on: z.array(z.string()).default([]),
+});
+
+export const TechLeadOutput = z.object({
+  summary: z.string(),
+  size: SizeSchema,
+  slices: z.array(Slice).min(1).max(8),
+  claims: z.array(Claim).default([]),
+  questions: z.array(z.string()).default([]),
+});
+
 export const ROLE_OUTPUTS = {
+  analyst: AnalystOutput,
+  "tech-lead": TechLeadOutput,
   "test-engineer": TestEngineerOutput,
   implementer: ImplementerOutput,
   "code-reviewer": ReviewerOutput,
@@ -117,7 +155,6 @@ export const MODELS = ["haiku", "sonnet", "opus", "fable"] as const;
 export type Model = (typeof MODELS)[number];
 
 export type WorkItemType = "bugfix" | "feature" | "change" | "refactor";
-export type Size = "trivial" | "small" | "standard" | "large";
 export type WorkItemStatus =
   | "queued"
   | "running"

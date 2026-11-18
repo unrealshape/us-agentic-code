@@ -1,0 +1,164 @@
+{
+  "type": "object",
+  "required": [
+    "summary",
+    "title",
+    "criteria",
+    "claims"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "given",
+          "when",
+          "then",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC-\\d+$"
+          },
+          "given": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string"
+          },
+          "then": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "task",
+              "code",
+              "user"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "text",
+          "level",
+          "evidence"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "VERIFIED",
+              "EXTRACTED",
+              "INFERRED",
+              "UNKNOWN"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "path",
+                    "lines",
+                    "quote"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "file"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Pfad relativ zum Projektordner"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[start, ende], 1-basiert"
+                    },
+                    "quote": {
+                      "type": "string",
+                      "description": "woertliches Zitat aus diesen Zeilen"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "gate_result_id"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "gate"
+                    },
+                    "gate_result_id": {
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "url"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "url"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}
