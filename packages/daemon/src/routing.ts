@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { MODELS, type Model, type Size } from "@usac/shared";
@@ -51,8 +52,47 @@ export interface Route {
 const rank = (m: Model) => MODELS.indexOf(m);
 const at = (i: number): Model => MODELS[Math.max(0, Math.min(MODELS.length - 1, i))]!;
 
-export function loadRouting(pluginRoot: string): RoutingConfig {
-  return RoutingConfig.parse(loadYaml(join(pluginRoot, "routing.yaml")));
+/**
+ * Lokale Abweichungen vom Plugin-Routing (`<home>/routing.override.yaml`, ADR 0010).
+ * Schluessel in `defaults`: Rollenname oder `rolle.variante`. `trials` sind laufende Proben nach einer Herabstufung.
+ */
+export const RoutingOverride = z.object({
+  defaults: z.record(z.string(), ModelName).default({}),
+  trials: z
+    .record(
+      z.string(),
+      z.object({ from: ModelName, to: ModelName, startedAt: z.string(), runs: z.number().int().min(0).default(0) }),
+    )
+    .default({}),
+});
+export type RoutingOverride = z.infer<typeof RoutingOverride>;
+
+export function loadRoutingOverride(path: string): RoutingOverride {
+  if (!existsSync(path)) return RoutingOverride.parse({});
+  return RoutingOverride.parse(loadYaml(path) ?? {});
+}
+
+/**
+ * Laedt `routing.yaml` aus dem Plugin. Eine Override-Datei ersetzt nur `defaults` der genannten Rollen
+ * (bzw. Varianten); `raise`, `fable` und `budget` bleiben aus dem Plugin.
+ */
+export function loadRouting(pluginRoot: string, overridePath?: string): RoutingConfig {
+  const cfg = RoutingConfig.parse(loadYaml(join(pluginRoot, "routing.yaml")));
+  if (!overridePath) return cfg;
+  const ov = loadRoutingOverride(overridePath);
+  for (const [key, model] of Object.entries(ov.defaults)) {
+    const dot = key.indexOf(".");
+    if (dot < 0) {
+      cfg.defaults[key] = model;
+      continue;
+    }
+    const role = key.slice(0, dot);
+    const variant = key.slice(dot + 1);
+    const def = cfg.defaults[role];
+    // Varianten-Override nur fuer Rollen, die im Plugin Varianten haben.
+    if (def && typeof def === "object") def[variant] = model;
+  }
+  return cfg;
 }
 
 export function resolveModel(cfg: RoutingConfig, role: string, ctx: RouteContext = {}): Route {
