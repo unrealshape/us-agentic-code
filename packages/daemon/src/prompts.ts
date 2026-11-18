@@ -121,3 +121,18 @@ export function reviewerPrompt(wi: WorkItem, diff: string, feedback?: string): s
     .filter(Boolean)
     .join("\n\n");
 }
+
+export function securityReviewerPrompt(wi: WorkItem, diff: string, triggers: string[], feedback?: string): string {
+  return [
+    taskBlock(wi),
+    `Deine Aufgabe: Pruefe die Aenderung unten ausschliesslich auf Sicherheit. Du kennst die Implementierung und andere Reviews nicht und bewertest nur, was im Code steht.
+- Ausgeloeste Security-Trigger: ${triggers.join(", ")}. Pruefe diese Bereiche gezielt (z. B. Rechtepruefung, Geheimnisse im Code, Injection, Befehlsausfuehrung, Datei- und Netzzugriffe, neue Abhaengigkeiten, CI-Rechte).
+- Befunde "critical" und "high" brauchen Belege.
+- verdict "approve" nur, wenn keine critical/high-Befunde bleiben.`,
+    "Diff:\n```diff\n" + diff.slice(0, 40_000) + "\n```",
+    feedback ? `Rueckmeldung zu deiner letzten Ausgabe:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
