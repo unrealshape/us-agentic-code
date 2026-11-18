@@ -21,9 +21,13 @@ export const realGh: GhRunner = async (cwd, args) => {
   return { exitCode: r.exitCode, output: r.output };
 };
 
-/** Erlaubt sind nur usac/<id> und feature/*; nie main/master. */
+/**
+ * Erlaubt sind nur usac/<id> und feature/*. Feature-Branches bleiben erlaubt, weil Phase-1-Auftraege
+ * auch auf feature/* arbeiten koennen und diese nie der Basis-Branch sind.
+ */
 function safeBranch(wi: { branch: string | null }): string {
   const b = wi.branch ?? "";
+  // main/master: zweite Schutzlinie, die Whitelist unten schliesst beide schon aus.
   if (!/^(usac\/[\w.-]+|feature\/[\w./-]+)$/.test(b) || /^(main|master)$/.test(b)) {
     throw new Escalate(`Push abgelehnt: Branch "${b}" ist nicht usac/<id> oder feature/*`);
   }
@@ -42,7 +46,7 @@ export function createIntegratorHandlers(deps: { git: GitRunner; gh: GhRunner })
 
   const push: PhaseHandler = async (wi, ctx) => {
     const branch = safeBranch(wi);
-    const r = await git(wi.worktree!, ["push", "-u", "origin", branch]);
+    const r = await git(wi.worktree!, ["push", "-u", "origin", `refs/heads/${branch}:refs/heads/${branch}`]);
     if (r.exitCode !== 0) throw new Escalate(`git push fehlgeschlagen: ${r.output}`);
     ctx.emit(wi, "pushed", { branch });
     return wi;
@@ -54,17 +58,21 @@ export function createIntegratorHandlers(deps: { git: GitRunner; gh: GhRunner })
     await requireGh(cwd);
     const log = await git(cwd, ["log", "-1", "--format=%B"]);
     const body = log.exitCode === 0 && log.output ? log.output : `Usac-Trace: ${wi.id}`;
-    const r = await gh(cwd, ["pr", "create", "--head", branch, "--title", wi.title, "--body", body]);
+    const r = await gh(cwd, ["pr", "create", "--base", ctx.profile.base_branch, "--head", branch, "--title", wi.title, "--body", body]);
     if (r.exitCode !== 0) throw new Escalate(`gh pr create fehlgeschlagen: ${r.output}`);
-    const prUrl = r.output.split("\n").pop()!.trim();
+    const prUrl = r.output.match(/https:\/\/\S+\/pull\/\d+/)?.[0];
+    if (!prUrl) throw new Escalate(`PR-URL nicht in der gh-Ausgabe gefunden: ${r.output}`);
     ctx.emit(wi, "pr.created", { branch, url: prUrl });
-    return ctx.save(wi, { prUrl });
+    // Eine fruehere H2-Freigabe gilt nur fuer ihre eigene PR-URL.
+    const old = ctx.state(wi) as { prUrl?: string };
+    return ctx.save(wi, old.prUrl && old.prUrl !== prUrl ? { prUrl, h2ApprovalId: undefined } : { prUrl });
   };
 
   const approve_h2: PhaseHandler = async (wi, ctx) => {
     const { store } = ctx;
     const s = ctx.state(wi) as { h2ApprovalId?: number; prUrl?: string };
     let approval = s.h2ApprovalId ? store.getApproval(s.h2ApprovalId) : null;
+    if (approval && (approval.context as { prUrl?: string } | null)?.prUrl !== s.prUrl) approval = null;
     if (!approval) {
       approval = store.createApproval(wi.id, "h2", { title: wi.title, prUrl: s.prUrl, branch: wi.branch });
       ctx.emit(wi, "approval.requested", { approval_id: approval.id, kind: "h2", pr: s.prUrl });
@@ -85,6 +93,10 @@ export function createIntegratorHandlers(deps: { git: GitRunner; gh: GhRunner })
     const approval = s.h2ApprovalId ? ctx.store.getApproval(s.h2ApprovalId) : null;
     if (!approval || approval.status !== "granted") {
       throw new Escalate("Merge ohne erteilte Freigabe H2 nicht erlaubt");
+    }
+    const approvedUrl = (approval.context as { prUrl?: string } | null)?.prUrl;
+    if (!s.prUrl || approvedUrl !== s.prUrl) {
+      throw new Escalate("Freigabe H2 gehoert nicht zu diesem PR");
     }
     const branch = safeBranch(wi);
     const r = await gh(wi.worktree!, ["pr", "merge", s.prUrl ?? branch, "--squash", "--delete-branch"]);
