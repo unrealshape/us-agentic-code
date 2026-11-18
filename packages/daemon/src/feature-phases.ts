@@ -103,8 +103,14 @@ export function createFeatureHandlers(): { spec: PhaseHandler; approve_spec: Pha
     }
     ctx.emit(wi, "approval.granted", { approval_id: approval.id, kind: "spec" });
     await git(wi.worktree!, "add", "--", SPEC_PATH);
-    const sha = await ctx.commit(wi.worktree!, `docs: Spec für "${line(out.title)}"\n\nUsac-Trace: ${wi.id}`);
-    ctx.emit(wi, "spec.committed", { path: SPEC_PATH, commit: sha });
+    // Wiedereintritt nach Absturz zwischen Commit und Phasenwechsel: nichts vorgemerkt heisst,
+    // die Spec ist schon committet. Dann den vorhandenen Commit nehmen statt erneut zu committen.
+    const staged = await git(wi.worktree!, "diff", "--cached", "--name-only", "--", SPEC_PATH);
+    const sha = staged
+      ? await ctx.commit(wi.worktree!, `docs: Spec für "${line(out.title)}"\n\nUsac-Trace: ${wi.id}`)
+      : await git(wi.worktree!, "log", "-1", "--format=%H", "--", SPEC_PATH);
+    if (!sha) throw new Error(`${SPEC_PATH} fehlt im Worktree und in der Historie`);
+    ctx.emit(wi, "spec.committed", { path: SPEC_PATH, commit: sha, ...(staged ? {} : { reused: true }) });
     return ctx.save(wi, { specFeedback: undefined }, { status: "running" });
   };
 

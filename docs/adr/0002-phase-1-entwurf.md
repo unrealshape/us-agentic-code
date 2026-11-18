@@ -21,15 +21,17 @@ Phase 0 kann nur den Workflow `bugfix` und endet mit einem lokalen Commit. Der O
 Phasen (Vorschlag):
 
 1. `setup`: Worktree und Branch `usac/<id>`.
-2. `spec`: Rolle `analyst` schreibt die Spec in `spec/feature.md`.
-3. `approve_spec`: Freigabe durch dich (neue Freigabe-Art, siehe unten).
-4. `plan`: Rolle `tech-lead` plant rückwärts in Slices. Jeder Slice bekommt eine Akzeptanzbedingung.
-5. `acceptance` je Slice: `test-engineer` schreibt rote Tests (wie bei `bugfix`).
+2. `spec`: Rolle `analyst` liefert die Spec als strukturierte Ausgabe (Kriterien, Nicht im Umfang, offene Fragen). Der Analyst schreibt **keine Datei** (nur `Read, Grep, Glob`); der Orchestrator rendert daraus deterministisch `spec/feature.md`.
+3. `approve_spec`: Freigabe durch dich, neue Freigabe-Art `spec`. `--auto spec` ist erlaubt, wirkt aber nur ohne offene Fragen. Erteilt: die Spec wird committet (`docs: Spec für "<titel>"`); ist sie beim Wiedereintritt schon committet, wird der vorhandene Commit übernommen (kein leerer Commit). Abgelehnt: zurück zu `spec` mit der Notiz, die dritte Ablehnung eskaliert.
+4. `plan`: Rolle `tech-lead` plant rückwärts in Slices. Jeder Slice bekommt eine Akzeptanzbedingung. Der Plan wird mechanisch geprüft (`checkPlan`).
+5. `acceptance` je Slice: `test-engineer` schreibt rote Tests (wie bei `bugfix`). Fehlt beim Wiedereintritt ein Test eines erledigten Slices, eskaliert der Auftrag.
 6. `approve_h1`: Freigabe der Slice-Tests.
 7. `lock`: Hash sperren, pro Slice.
 8. `implement` je Slice: bis Gates grün, Fehlversuche wie gehabt.
 9. `review`: `code-reviewer`, frischer Kontext.
 10. `integrate`: siehe Abschnitt Integrator.
+
+Stand 2026-11-18: Die Handler für `spec`, `approve_spec` und `plan` sind in `registry-setup.ts` registriert; `feature` läuft mit echten Handlern bis zur Freigabe H1 (`tests/acceptance/feature-h1.test.ts`). **Review-Befund I1 geschlossen.** `--auto` erlaubt nur `h1` und `spec`.
 
 ### 3. Integrator mit PR und Freigabe H2
 

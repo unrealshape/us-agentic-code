@@ -15,10 +15,14 @@ import { openStore } from "./store";
 const PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
 const HOME = process.env.USAC_HOME ?? join(homedir(), ".usac");
 
+/** Freigaben, die per --auto automatisch erteilt werden duerfen (H2 nie). */
+const AUTO_ALLOWED = ["h1", "spec"];
+
 const HELP = `US-AGENTIC-CODE (usac)
 
   usac init [pfad]                         Projekt einrichten (.usac/project.yaml, Graphify)
-  usac run <bugfix|feature> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1]
+  usac run <bugfix|feature> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,spec]
+                                           --auto spec wirkt nur, wenn die Spec keine offenen Fragen hat
   usac resume <workitem-id>                Auftrag fortsetzen (z. B. nach Freigabe)
   usac status [workitem-id]                Auftraege und Status
   usac events <workitem-id> [--since n]    Event-Log eines Auftrags
@@ -95,6 +99,8 @@ async function main() {
       const auto = values.auto ? values.auto.split(",").map((a) => a.trim()) : [];
       // H2 (Merge in die Basis) erteilt immer ein Mensch.
       if (auto.includes("h2")) throw new Error("--auto h2 ist nicht erlaubt: Die Freigabe H2 vor dem Merge erteilt immer ein Mensch (usac approve).");
+      const unknown = auto.filter((a) => !AUTO_ALLOWED.includes(a));
+      if (unknown.length) throw new Error(`--auto erlaubt nur ${AUTO_ALLOWED.join(", ")} (unbekannt: ${unknown.join(", ")})`);
       const { orch } = orchestrator(auto);
       const wi = await orch.submit({
         projectPath: resolve(values.project!),

@@ -6,7 +6,7 @@
  * nach implement, damit der Test ohne Integrator auskommt.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACCEPTANCE_SPEC, FIXED_ROTATION, REPO_ROOT, setupProject, tempHome } from "../helpers";
@@ -195,6 +195,26 @@ describe("Phase 1b: roter Test je Slice", () => {
     expect(readFileSync(join(worktree, S1_FILE), "utf8")).toBe(ACCEPTANCE_SPEC);
     const reds = events(wi.id).filter((e) => e.type === "acceptance.red");
     expect(reds.map((e) => (e.data as { slice?: string }).slice)).toEqual(["S1", "S2"]);
+  }, 60_000);
+
+  test("Resume mitten in acceptance eskaliert, wenn ein früherer Slice-Test fehlt", async () => {
+    const { store, orch, submit, teCalls } = setup([s1Ok, s2Ok]);
+    const wi = await submit();
+    expect((await orch.run(wi.id)).status).toBe("awaiting_approval");
+    // Stand nach S1, vor S2 nachstellen; der unversionierte S1-Test ist inzwischen verschwunden.
+    const cur = store.getWorkItem(wi.id)!;
+    const s = cur.state as Record<string, unknown>;
+    store.updateWorkItem(wi.id, {
+      status: "running",
+      state: { ...s, phase: "acceptance", sliceTests: { S1: [S1_FILE] }, acceptanceFiles: undefined, h1ApprovalId: undefined },
+    });
+    rmSync(join(cur.worktree!, S1_FILE));
+    rmSync(join(cur.worktree!, S2_FILE));
+    const before = teCalls().length;
+    const result = await orch.run(wi.id);
+    expect(result.status).toBe("escalated");
+    expect(result.reason).toContain(S1_FILE);
+    expect(teCalls().length).toBe(before);
   }, 60_000);
 
   test("grüner Nachweis je Slice", async () => {

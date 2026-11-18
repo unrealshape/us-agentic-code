@@ -97,6 +97,25 @@ describe("Feature-Handler spec/approve_spec/plan", () => {
     expect(s.sliceOrder).toEqual(["S1"]);
   });
 
+  test("approve_spec ist nach dem Commit wiedereintrittsfest", async () => {
+    const { store, orch, submit } = setup({ analyst: analyst(), "tech-lead": techLead(planFull) }, ["spec"]);
+    const wi = await submit();
+    expect((await orch.run(wi.id)).status).toBe("done");
+    const wt = store.getWorkItem(wi.id)!.worktree!;
+    const subjects = () => git(wt, "log", "--format=%s").split("\n").filter((s) => s.startsWith("docs: Spec für"));
+    expect(subjects()).toHaveLength(1);
+    // Absturz nach dem Commit, vor dem Phasenwechsel: Zustand steht noch auf approve_spec.
+    const s = store.getWorkItem(wi.id)!.state as Record<string, unknown>;
+    store.updateWorkItem(wi.id, { status: "running", state: { ...s, phase: "approve_spec" } });
+    const rerun = await orch.run(wi.id);
+    expect(rerun.reason).toBeUndefined();
+    expect(rerun.status).toBe("done");
+    expect(subjects()).toHaveLength(1);
+    const committed = store.events({ traceId: wi.id, type: "spec.committed" }).map((e) => (e.data as { commit: string }).commit);
+    expect(committed).toHaveLength(2);
+    expect(committed[1]).toBe(committed[0]);
+  });
+
   test("offene Fragen verhindern Auto-Freigabe", async () => {
     const { store, orch, submit } = setup({ analyst: analyst(["Welche Einheit?"]), "tech-lead": techLead(planFull) }, ["spec"]);
     const wi = await submit();

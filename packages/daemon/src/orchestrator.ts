@@ -197,6 +197,10 @@ registerPhase("acceptance", async (wi, ctx) => {
   }
   const order = s.sliceOrder ?? s.slices.map((x) => x.id);
   const sliceTests: Record<string, string[]> = { ...s.sliceTests };
+  // Resume: Tests erledigter Slices sind bis lock unversioniert. Fehlt einer, ist der rote
+  // Nachweis verloren; das entscheidet ein Mensch, der Lauf darf nicht still weitergehen.
+  const lost = unionSliceTests(order, sliceTests).filter((f) => !existsSync(join(wi.worktree!, f)));
+  if (lost.length) throw new Escalate(`Tests erledigter Slices fehlen im Worktree: ${lost.join(", ")}`);
   for (const id of order) {
     if (sliceTests[id]) continue; // Resume: Slice hat schon einen roten Test
     const slice = s.slices.find((x) => x.id === id);
