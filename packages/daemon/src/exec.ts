@@ -27,9 +27,13 @@ export async function sh(command: string, cwd: string, timeoutMs = 120_000): Pro
   return { exitCode: timedOut ? 124 : exitCode, output, durationMs: Date.now() - started, timedOut };
 }
 
-/** Git-Aufruf, wirft bei Fehler. */
+/**
+ * Git-Aufruf, wirft bei Fehler.
+ * core.autocrlf=false erzwingen: Unter Windows wuerde Git beim Checkout CRLF schreiben,
+ * und die Hashes gesperrter Abnahmetests (LF) stimmten danach nicht mehr.
+ */
 export async function git(cwd: string, ...args: string[]): Promise<string> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["git", "-c", "core.autocrlf=false", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),

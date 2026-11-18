@@ -21,6 +21,8 @@ Ein eigenes Entwicklungsteam aus Claude-Code-Agents, als Plugin installiert und 
 
 Linux oder Windows mit WSL2. Bun, Git, Claude Code (Abo), Python 3.10+ fuer Graphify, bubblewrap und socat fuer die Sandbox. Pro Sprache die Werkzeuge des Gate-Profils (Lua: busted, luacheck; optional stylua).
 
+Schritt-für-Schritt-Installation (Windows nativ und WSL2, mit Fehlersuche): [docs/installation.md](docs/installation.md).
+
 ```bash
 bun install
 bun packages/daemon/src/cli.ts doctor

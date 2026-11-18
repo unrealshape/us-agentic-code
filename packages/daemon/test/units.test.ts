@@ -129,6 +129,13 @@ describe("ClaudeRunner", () => {
     expect(s.permissions.allow).toContain("Edit(//tmp/wt/**)");
   });
 
+  test("Windows-Pfade bleiben in den Permission-Regeln erhalten (Laufwerk, Slashes)", () => {
+    const winSpec = { ...spec, cwd: "C:\\Users\\jok\\proj" };
+    const s = buildSettings(winSpec, false) as any;
+    expect(s.permissions.allow).toContain("Edit(//C:/Users/jok/proj/**)");
+    expect(s.permissions.allow).toContain("Write(//C:/Users/jok/proj/**)");
+  });
+
   test("liest Stream, strukturierte Ausgabe und Tokens", async () => {
     const bin = fakeClaude([
       { type: "system", subtype: "init", session_id: "s1" },
@@ -167,3 +174,22 @@ function fakeClaude(lines: object[], delaySec = 0): string {
   chmodSync(bin, 0o755);
   return bin;
 }
+
+describe("Git-Zeilenenden (Windows)", () => {
+  test("revertPaths stellt die Bytes des Abnahmetests exakt wieder her, auch mit core.autocrlf=true", async () => {
+    const { revertPaths } = await import("../src/integrity");
+    const { git } = await import("../src/exec");
+    const dir = mkdtempSync(join(tmpdir(), "crlf-"));
+    await git(dir, "init", "-q");
+    await git(dir, "config", "core.autocrlf", "true");
+    await git(dir, "config", "user.email", "t@t");
+    await git(dir, "config", "user.name", "t");
+    writeFileSync(join(dir, "f.lua"), "a\nb\nc\n");
+    await git(dir, "add", "f.lua");
+    await git(dir, "commit", "-qm", "init");
+    const locked = hashFiles(dir, ["f.lua"]);
+    writeFileSync(join(dir, "f.lua"), "x\n");
+    await revertPaths(dir, "HEAD", ["f.lua"]);
+    expect(hashFiles(dir, ["f.lua"])).toBe(locked);
+  });
+});

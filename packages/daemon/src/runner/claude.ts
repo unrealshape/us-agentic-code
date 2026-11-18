@@ -12,13 +12,22 @@ export interface ClaudeRunnerOptions {
   sandbox?: boolean;
 }
 
+/**
+ * Macht aus einem Arbeitsverzeichnis einen Permission-Pfad mit "//"-Praefix (absolut).
+ * POSIX: /tmp/wt -> //tmp/wt. Windows: C:\proj -> //C:/proj (Backslashes werden zu Slashes).
+ */
+export function toRulePath(cwd: string): string {
+  const normalized = cwd.replace(/\\/g, "/").replace(/^\/+/, "");
+  return `//${normalized}`;
+}
+
 /** Erzeugt die Settings-Datei je Run: Sandbox fuer Bash, Schreibrechte nur im Worktree. */
 export function buildSettings(spec: RunSpec, sandbox: boolean): object {
+  const root = toRulePath(spec.cwd);
   return {
     sandbox: sandbox ? { enabled: true, autoAllowBashIfSandboxed: true } : { enabled: false },
     permissions: {
-      // "//" = absoluter Pfad im Dateisystem.
-      allow: [`Edit(/${spec.cwd}/**)`, `Write(/${spec.cwd}/**)`],
+      allow: [`Edit(${root}/**)`, `Write(${root}/**)`],
       deny: ["Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Write(**/.env)"],
     },
   };
