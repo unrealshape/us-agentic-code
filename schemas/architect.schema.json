@@ -1,0 +1,239 @@
+{
+  "type": "object",
+  "required": [
+    "summary",
+    "options",
+    "decision",
+    "risks",
+    "claims",
+    "questions"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "options": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "pros",
+          "cons"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "pros": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "decision": {
+      "type": "string",
+      "description": "Empfehlung; die Entscheidung trifft der Mensch"
+    },
+    "adr": {
+      "type": "object",
+      "required": [
+        "title",
+        "context",
+        "decision",
+        "consequences"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "consequences": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "text",
+          "level",
+          "evidence"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "VERIFIED",
+              "EXTRACTED",
+              "INFERRED",
+              "UNKNOWN"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "path",
+                    "lines",
+                    "quote"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "file"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Pfad relativ zum Projektordner"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[start, ende], 1-basiert"
+                    },
+                    "quote": {
+                      "type": "string",
+                      "description": "woertliches Zitat aus diesen Zeilen"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "gate_result_id"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "gate"
+                    },
+                    "gate_result_id": {
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "url"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "url"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "node_id",
+                    "path",
+                    "lines",
+                    "quote"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "graph"
+                    },
+                    "node_id": {
+                      "type": "string",
+                      "description": "Knoten-ID aus graphify-out/graph.json"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Quelldatei des Knotens, relativ zum Projektordner"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[start, ende], 1-basiert"
+                    },
+                    "quote": {
+                      "type": "string",
+                      "description": "woertliches Zitat aus diesen Zeilen"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "memory"
+                    },
+                    "id": {
+                      "type": "string",
+                      "description": "ID eines Memory-Eintrags"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

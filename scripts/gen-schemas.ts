@@ -196,6 +196,66 @@ const schemas: Record<string, object> = {
     },
     additionalProperties: false,
   },
+  architect: {
+    type: "object",
+    required: ["summary", "options", "decision", "risks", "claims", "questions"],
+    properties: {
+      summary: { type: "string" },
+      options: {
+        type: "array",
+        minItems: 2,
+        items: {
+          type: "object",
+          required: ["name", "pros", "cons"],
+          properties: {
+            name: { type: "string" },
+            pros: { type: "array", items: { type: "string" } },
+            cons: { type: "array", items: { type: "string" } },
+          },
+          additionalProperties: false,
+        },
+      },
+      decision: { type: "string", description: "Empfehlung; die Entscheidung trifft der Mensch" },
+      adr: {
+        type: "object",
+        required: ["title", "context", "decision", "consequences"],
+        properties: {
+          title: { type: "string" },
+          context: { type: "string" },
+          decision: { type: "string" },
+          consequences: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      risks: { type: "array", items: { type: "string" } },
+      claims,
+      questions,
+    },
+    additionalProperties: false,
+  },
+  "qa-engineer": {
+    type: "object",
+    required: ["summary", "e2e_tests", "criteria", "claims"],
+    properties: {
+      summary: { type: "string" },
+      e2e_tests: { type: "array", items: { type: "string" }, minItems: 1, description: "Pfade der E2E-Tests unter den test_globs" },
+      criteria: { type: "array", items: { type: "string", pattern: "^AC-\\d+$" } },
+      claims,
+    },
+    additionalProperties: false,
+  },
+  "environment-engineer": {
+    type: "object",
+    required: ["summary", "changed_files", "setup_commands", "claims", "questions"],
+    properties: {
+      summary: { type: "string" },
+      changed_files: { type: "array", items: { type: "string" } },
+      setup_commands: { type: "array", items: { type: "string" } },
+      claims,
+      questions,
+    },
+    additionalProperties: false,
+  },
 };
 
 const review = {

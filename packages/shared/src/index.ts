@@ -180,7 +180,58 @@ export const LearnerOutput = z.object({
 });
 export type LearnerOutput = z.infer<typeof LearnerOutput>;
 
+export const ArchitectOption = z.object({
+  name: z.string().min(1),
+  pros: z.array(z.string()).default([]),
+  cons: z.array(z.string()).default([]),
+});
+
+export const AdrDraft = z.object({
+  title: z.string().min(1),
+  context: z.string(),
+  decision: z.string(),
+  consequences: z.string(),
+});
+
+/**
+ * Architect schlaegt vor, entscheidet nicht: `decision` ist eine Empfehlung,
+ * die Freigabe trifft der Mensch. Im Spike (Phase `research`) ohne `adr`,
+ * Befunde in `claims`, Empfehlung in `decision`.
+ */
+export const ArchitectOutput = z.object({
+  summary: z.string(),
+  options: z.array(ArchitectOption).min(2),
+  decision: z.string(),
+  adr: AdrDraft.optional(),
+  risks: z.array(z.string()).default([]),
+  claims: z.array(Claim).default([]),
+  questions: z.array(z.string()).default([]),
+});
+export type ArchitectOutput = z.infer<typeof ArchitectOutput>;
+
+export const QaOutput = z.object({
+  summary: z.string(),
+  /** Pfade der E2E-Tests unter den `test_globs` des Gate-Profils. */
+  e2e_tests: z.array(z.string().min(1)).min(1),
+  /** Abgedeckte Akzeptanzkriterien (AC-IDs). */
+  criteria: z.array(z.string().regex(/^AC-\d+$/)).default([]),
+  claims: z.array(Claim).default([]),
+});
+export type QaOutput = z.infer<typeof QaOutput>;
+
+export const EnvironmentOutput = z.object({
+  summary: z.string(),
+  changed_files: z.array(z.string()).default([]),
+  setup_commands: z.array(z.string()).default([]),
+  claims: z.array(Claim).default([]),
+  questions: z.array(z.string()).default([]),
+});
+export type EnvironmentOutput = z.infer<typeof EnvironmentOutput>;
+
 export const ROLE_OUTPUTS = {
+  architect: ArchitectOutput,
+  "qa-engineer": QaOutput,
+  "environment-engineer": EnvironmentOutput,
   analyst: AnalystOutput,
   "tech-lead": TechLeadOutput,
   "test-engineer": TestEngineerOutput,
@@ -214,7 +265,16 @@ export interface UsacEvent<T = unknown> {
 export const MODELS = ["haiku", "sonnet", "opus", "fable"] as const;
 export type Model = (typeof MODELS)[number];
 
-export type WorkItemType = "bugfix" | "feature" | "change" | "refactor" | "onboarding";
+export type WorkItemType =
+  | "bugfix"
+  | "feature"
+  | "change"
+  | "refactor"
+  | "new-project"
+  | "dependency-update"
+  | "security-fix"
+  | "spike"
+  | "onboarding";
 export type WorkItemStatus =
   | "queued"
   | "running"
