@@ -28,7 +28,9 @@ stages:
   - name: unit
     run: "busted --output=TAP"
     stage: 1
+  # Ohne luacov scheitert `busted --coverage` mit Exit 1; die Vorpruefung meldet stattdessen
+  # Exit 127 (Werkzeug fehlt), damit das optionale Gate `skipped` ist statt `failed`.
   - name: coverage
-    run: "busted --coverage --output=TAP && luacov && tail -n 5 luacov.report.out"
+    run: "command -v luacov >/dev/null 2>&1 || exit 127; busted --coverage --output=TAP && luacov && tail -n 5 luacov.report.out"
     stage: 5
     optional: true

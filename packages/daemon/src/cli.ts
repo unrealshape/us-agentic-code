@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -20,13 +20,20 @@ const HOME = process.env.USAC_HOME ?? join(homedir(), ".usac");
 /** Takt der Scheduler-Schleife von `usac daemon` (offene Entscheidung 9 im Plan). */
 const DAEMON_TICK_MS = 1_000;
 
+/** Typen fuer `usac run` (onboarding hat einen eigenen Ablauf). */
+const RUN_TYPES: WorkItemType[] = ["bugfix", "feature", "change", "refactor", "new-project", "dependency-update", "security-fix", "spike"];
+
 /** Freigaben, die per --auto automatisch erteilt werden duerfen (H2 nie). */
 const AUTO_ALLOWED = ["h1", "spec"];
 
 const HELP = `US-AGENTIC-CODE (usac)
 
   usac init [pfad]                         Projekt einrichten (.usac/project.yaml, Graphify)
-  usac run <bugfix|feature> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,spec] [--queue]
+  usac new-project <ordner> --stack <profil>  Ordner, git init, .usac/project.yaml und ersten Commit anlegen
+                                           (kein GitHub-Remote; das richtest du selbst ein)
+  usac run <typ> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,spec] [--queue]
+                                           <typ>: bugfix, feature, change, refactor, new-project,
+                                           dependency-update, security-fix, spike
                                            --auto spec wirkt nur, wenn die Spec keine offenen Fragen hat
                                            --queue reiht nur ein; usac daemon fuehrt aus
   usac resume <workitem-id>                Auftrag fortsetzen (z. B. nach Freigabe)
@@ -104,6 +111,7 @@ async function main() {
         },
       });
       const type = (positionals[0] ?? "bugfix") as WorkItemType;
+      if (!RUN_TYPES.includes(type)) throw new Error(`Unbekannter Typ "${type}". Erlaubt: ${RUN_TYPES.join(", ")}`);
       if (!values.title) throw new Error("Titel fehlt (-t)");
       const auto = values.auto ? values.auto.split(",").map((a) => a.trim()) : [];
       // H2 (Merge in die Basis) erteilt immer ein Mensch.
@@ -125,6 +133,34 @@ async function main() {
         break;
       }
       printResult(await orch.run(wi.id), wi.id);
+      break;
+    }
+    case "new-project": {
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { stack: { type: "string" } } });
+      if (!positionals[0]) throw new Error("Ordner fehlt: usac new-project <ordner> --stack <profil>");
+      const stacks = readdirSync(join(PLUGIN_ROOT, "gate-profiles"))
+        .filter((f) => f.endsWith(".yaml"))
+        .map((f) => f.slice(0, -5));
+      if (!values.stack || !stacks.includes(values.stack)) {
+        throw new Error(`--stack fehlt oder ist unbekannt (${values.stack ?? "-"}). Erlaubt: ${stacks.join(", ")}`);
+      }
+      const dir = resolve(positionals[0]);
+      if (existsSync(dir) && readdirSync(dir).length) throw new Error(`Ordner ${dir} existiert und ist nicht leer`);
+      mkdirSync(join(dir, ".usac"), { recursive: true });
+      const name = basename(dir);
+      writeFileSync(join(dir, ".usac/project.yaml"), stringify({ name, languages: [values.stack], gate_profile: values.stack, base_branch: "main" }));
+      const run = async (cmd: string) => {
+        const r = await sh(cmd, dir, 30_000);
+        if (r.exitCode !== 0) throw new Error(`${cmd} fehlgeschlagen (${r.exitCode}): ${r.output}`);
+        return r.output;
+      };
+      await run("git init -q -b main");
+      await run("git add -A");
+      // Ohne konfigurierte Git-Identitaet committet usac unter eigenem Namen (wie der Orchestrator).
+      const identity = (await sh("git config user.email", dir, 10_000)).exitCode === 0 ? "" : "-c user.name=US-AGENTIC-CODE -c user.email=usac@localhost ";
+      await run(`git ${identity}commit -q -m "chore: Projekt angelegt"`);
+      console.log(`Projekt angelegt: ${dir} (Gate-Profil ${values.stack}, Branch main, ohne Remote)`);
+      console.log(`Weiter mit: usac run new-project -t <titel> --project ${dir}`);
       break;
     }
     case "resume": {

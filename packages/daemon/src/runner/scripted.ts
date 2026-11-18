@@ -10,6 +10,7 @@ export interface RecordedCall {
   cwd: string;
   env?: Record<string, string>;
   networkAllow?: string[];
+  disallowedTools?: string[];
 }
 
 /**
@@ -25,7 +26,7 @@ export class ScriptedRunner implements Runner {
   async run(spec: RunSpec): Promise<RunOutcome> {
     const n = this.counts.get(spec.role) ?? 0;
     this.counts.set(spec.role, n + 1);
-    this.calls.push({ role: spec.role, model: spec.model, prompt: spec.prompt, cwd: spec.cwd, env: spec.env, networkAllow: spec.networkAllow });
+    this.calls.push({ role: spec.role, model: spec.model, prompt: spec.prompt, cwd: spec.cwd, env: spec.env, networkAllow: spec.networkAllow, disallowedTools: spec.disallowedTools });
     const h = this.handlers[spec.role];
     if (!h) return { ok: false, error: `Kein Handler fuer Rolle ${spec.role}` };
     const fn = Array.isArray(h) ? h[Math.min(n, h.length - 1)]! : h;

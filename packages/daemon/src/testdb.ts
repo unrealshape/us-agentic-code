@@ -49,7 +49,7 @@ export async function createTestDb(opts: {
     } catch {
       // kein Git-Repo: nichts auszuschliessen
     }
-    const file = join(dir, `${name}.db`);
+    const file = sqliteFile(opts.cwd, opts.wiId);
     rmSync(file, { force: true });
     if (cfg.template) {
       copyFileSync(isAbsolute(cfg.template) ? cfg.template : join(opts.cwd, cfg.template), file);
@@ -59,23 +59,46 @@ export async function createTestDb(opts: {
     return {
       env: { DATABASE_URL: `file:${file}` },
       async drop() {
-        for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(file + suffix, { force: true });
+        sqliteDrop(file);
       },
     };
   }
 
-  const run = opts.sh ?? defaultSh;
+  return createPostgres(name, cfg, opts.cwd, opts.sh ?? defaultSh);
+}
+
+function sqliteFile(cwd: string, wiId: string): string {
+  return join(cwd, TMP_DIR, `${testDbName(wiId)}.db`);
+}
+
+function sqliteDrop(file: string): void {
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(file + suffix, { force: true });
+}
+
+async function postgresDrop(name: string, cwd: string, run: typeof defaultSh): Promise<void> {
+  const r = await run(`dropdb --if-exists ${name}`, cwd);
+  if (r.exitCode !== 0) throw new Error(`dropdb ${name} fehlgeschlagen (${r.exitCode}): ${r.output}`);
+}
+
+/**
+ * Loescht die Test-Datenbank eines Work-Items ohne das `TestDb`-Objekt aus `createTestDb`
+ * (z. B. in einem spaeteren Lauf nach Resume). Name und Ort sind aus Work-Item und Art ableitbar.
+ */
+export async function dropTestDb(opts: { wiId: string; cwd: string; cfg: TestDbConfig; sh?: typeof defaultSh }): Promise<void> {
+  const cfg = TestDbConfig.parse(opts.cfg);
+  if (cfg.kind === "sqlite") return sqliteDrop(sqliteFile(opts.cwd, opts.wiId));
+  return postgresDrop(testDbName(opts.wiId), opts.cwd, opts.sh ?? defaultSh);
+}
+
+async function createPostgres(name: string, cfg: Extract<TestDbConfig, { kind: "postgres" }>, cwd: string, run: typeof defaultSh): Promise<TestDb> {
   const template = cfg.template_db ? `-T ${shellQuote(cfg.template_db)} ` : "";
-  const res = await run(`createdb ${template}${name}`, opts.cwd);
+  const res = await run(`createdb ${template}${name}`, cwd);
   if (res.exitCode === 127) {
     throw new Error("createdb nicht gefunden: lokales PostgreSQL installieren oder test_db.kind sqlite wählen");
   }
   if (res.exitCode !== 0) throw new Error(`createdb ${name} fehlgeschlagen (${res.exitCode}): ${res.output}`);
   return {
     env: { DATABASE_URL: `postgresql:///${name}` },
-    async drop() {
-      const r = await run(`dropdb --if-exists ${name}`, opts.cwd);
-      if (r.exitCode !== 0) throw new Error(`dropdb ${name} fehlgeschlagen (${r.exitCode}): ${r.output}`);
-    },
+    drop: () => postgresDrop(name, cwd, run),
   };
 }

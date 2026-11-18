@@ -19,7 +19,8 @@ import { excludeFromGit, hasGraphify, updateGraph } from "./graph";
 import { validateClaims, validateFindings, type EvidenceError } from "./evidence";
 import { runAcceptance, runStages, summarize } from "./gates";
 import { changedFiles, checkImplementerDiff, hashFiles, revertPaths } from "./integrity";
-import { Escalate, getPhase, missingPhases, registerPhase, type Actor, type PhaseContext, type PhaseLimits } from "./phases";
+import { Escalate, getPhase, missingPhases, registerPhase, type Actor, type PhaseContext, type PhaseLimits, type RunRoleOptions } from "./phases";
+import { cleanupStalePreviews } from "./preview";
 import { readHookLog } from "./hook-log";
 import { HEARTBEAT_MS, PROJECT_WIDE, acquireLeases, ensureLeaseSchema, heartbeat, leasesOf, normalizeLeasePath, releaseLeases } from "./leases";
 import { GRAPH_NOTE, implementerPrompt, rolePrompt, roleSchema, testEngineerPrompt } from "./prompts";
@@ -30,7 +31,9 @@ import { validateHosts } from "./runner/claude";
 import type { Runner } from "./runner/types";
 import { MAX_PARALLEL, ensureSlotSchema, releaseSlot, slotHeartbeat, tryAcquireSlot } from "./scheduler";
 import type { GateResult, Store, WorkItem } from "./store";
-import { loadWorkflow, type PhaseSpec, type Workflow } from "./workflow";
+import { createTeamHandlers } from "./team-phases";
+import { createTestDb, dropTestDb } from "./testdb";
+import { activePhases, loadWorkflow, type PhaseSpec, type Workflow } from "./workflow";
 
 export { Escalate } from "./phases";
 
@@ -111,6 +114,8 @@ type State = {
   sliceOrder?: string[];
   /** Rote Tests je Slice-ID; erledigte Slices werden beim Wiedereintritt uebersprungen. */
   sliceTests?: Record<string, string[]>;
+  /** Umgebung der Test-Datenbank (DATABASE_URL), angelegt in setup bei `profile.test_db`. */
+  testDbEnv?: Record<string, string>;
 };
 
 const st = (ctx: PhaseContext, wi: WorkItem) => ctx.state(wi) as State;
@@ -127,8 +132,16 @@ registerPhase("setup", async (wi, ctx) => {
   if (!existsSync(dir)) await git(wi.projectPath, "worktree", "add", "-q", "-b", branch, dir, profile.base_branch);
   // Erzeugte Artefakte gehoeren nie in einen Commit.
   await excludeFromGit(dir, ["graphify-out/", "luacov.stats.out", "luacov.report.out"]);
-  wi = ctx.save(wi, {}, { branch, worktree: dir });
+  // baseRef: Abzweig vom Basis-Branch; lock ersetzt ihn durch den Test-Commit. Workflows ohne lock
+  // (dependency-update, spike) vergleichen damit im Review gegen den Stand vor dem Auftrag.
+  const s = st(ctx, wi);
+  wi = ctx.save(wi, s.baseRef ? {} : { baseRef: await git(dir, "rev-parse", "HEAD") }, { branch, worktree: dir });
   ctx.emit(wi, "worktree.created", { branch, path: dir, base: profile.base_branch });
+  if (profile.test_db && !s.testDbEnv) {
+    const db = await createTestDb({ wiId: wi.id, cwd: dir, cfg: profile.test_db });
+    wi = ctx.save(wi, { testDbEnv: db.env });
+    ctx.emit(wi, "testdb.created", { kind: profile.test_db.kind });
+  }
   if (ctx.graphify !== false && (await hasGraphify())) {
     const g = await updateGraph(dir);
     ctx.emit(wi, g.ok ? "graph.updated" : "graph.failed", { nodes: g.nodes, edges: g.edges, output: g.ok ? undefined : g.output });
@@ -200,6 +213,11 @@ async function writeRedTest(wi: WorkItem, ctx: PhaseContext, input?: SliceInput,
   );
 }
 
+/** Sammel-Slice fuer eine Spec ohne Plan; dieselbe Form nutzt verify (criteriaContext in team-phases.ts). */
+function wholeSpecSlice(criteria: AcceptanceCriterion[]): Slice {
+  return { id: "S0", title: "Gesamt", criteria: criteria.map((c) => c.id), files: [], depends_on: [] };
+}
+
 /** Vereinigung der Slice-Tests in sliceOrder-Reihenfolge, ohne Duplikate. */
 function unionSliceTests(order: string[], tests: Record<string, string[]>): string[] {
   return [...new Set(order.flatMap((id) => tests[id] ?? []))];
@@ -208,7 +226,10 @@ function unionSliceTests(order: string[], tests: Record<string, string[]>): stri
 registerPhase("acceptance", async (wi, ctx) => {
   const s = st(ctx, wi);
   if (!s.slices) {
-    const { files } = await writeRedTest(wi, ctx);
+    // Spec ohne Plan (change): Sammel-Slice S0 mit allen Kriterien, damit der Test Engineer die
+    // Marken [AC-n] setzt, die verify (Stufe 6) ueber denselben Sammel-Slice prueft.
+    const input = s.spec ? { slice: wholeSpecSlice(s.spec.criteria), criteria: s.spec.criteria } : undefined;
+    const { files } = await writeRedTest(wi, ctx, input);
     return ctx.save(wi, { acceptanceFiles: files });
   }
   const order = s.sliceOrder ?? s.slices.map((x) => x.id);
@@ -296,7 +317,9 @@ registerPhase("implement", async (wi, ctx) => {
     if (busy) failure = (failure ? failure + "\n" : "") + busy;
 
     if (!failure) {
-      const stages = await runStages(ctx.store, wi.id, gp, wi.worktree!, 2);
+      // Stufen 1–2 mit Lauf-Kontext (Basis-Commit, Test-DB); Stufen 3–6 laufen in verify (team-phases.ts).
+      const stageCtx = { workItemType: wi.type, baseRef: s.baseRef!, env: s.testDbEnv ?? {} };
+      const stages = await runStages(ctx.store, wi.id, gp, wi.worktree!, 2, stageCtx);
       // Mit Slices: je Slice ein eigener Abnahmelauf nur mit dessen Tests; alle muessen gruen sein.
       const groups: { slice?: string; files: string[] }[] = s.slices
         ? (s.sliceOrder ?? s.slices.map((x) => x.id)).map((id) => ({ slice: id, files: s.sliceTests?.[id] ?? [] }))
@@ -327,11 +350,28 @@ registerPhase("implement", async (wi, ctx) => {
 // Review mit einem oder zwei Sitzen (review.ts, ADR 0004); ersetzt den frueheren eingebauten Handler.
 registerPhase("review", createReviewHandler());
 
+// Erweitertes Team (team-phases.ts): design, environment, qa, verify, security, characterize, research.
+for (const [name, handler] of Object.entries(createTeamHandlers())) registerPhase(name, handler);
+
+/** Conventional-Commit-Praefix je Auftragstyp. */
+const COMMIT_PREFIX: Partial<Record<WorkItemType, string>> = {
+  bugfix: "fix",
+  "security-fix": "fix",
+  feature: "feat",
+  change: "feat",
+  "new-project": "feat",
+  refactor: "refactor",
+  spike: "docs",
+};
+
 registerPhase("integrate", async (wi, ctx) => {
   await git(wi.worktree!, "add", "-A");
-  const prefix = wi.type === "bugfix" ? "fix" : wi.type === "feature" ? "feat" : wi.type === "refactor" ? "refactor" : "chore";
-  const sha = await ctx.commit(wi.worktree!, `${prefix}: ${wi.title}\n\nUsac-Trace: ${wi.id}`);
-  ctx.emit(wi, "integrated", { branch: wi.branch, commit: sha });
+  // Nichts vorgemerkt (z. B. dependency-update: environment hat schon committet): kein leerer Commit.
+  const staged = await git(wi.worktree!, "diff", "--cached", "--name-only");
+  const sha = staged
+    ? await ctx.commit(wi.worktree!, `${COMMIT_PREFIX[wi.type] ?? "chore"}: ${wi.title}\n\nUsac-Trace: ${wi.id}`)
+    : await git(wi.worktree!, "rev-parse", "HEAD");
+  ctx.emit(wi, "integrated", { branch: wi.branch, commit: sha, ...(staged ? {} : { empty: true }) });
   // Nur als letzte Phase beendet integrate den Auftrag (bugfix); sonst folgen push/pr (feature).
   if (ctx.workflow.phases.at(-1)?.name !== "integrate") return wi;
   wi = ctx.save(wi, { phase: "done" }, { status: "done" });
@@ -366,6 +406,16 @@ async function enforceLeases(wi: WorkItem, ctx: PhaseContext, baseRef: string): 
   return lines.join("\n");
 }
 
+/** Begruendung fuer `phase.skipped`: welche Bedingung aus `when` nicht zutrifft. */
+function skipReason(p: PhaseSpec, wi: WorkItem, profile: ProjectProfile): string {
+  const w = p.when ?? {};
+  const reasons: string[] = [];
+  if (w.size && !w.size.includes(wi.size)) reasons.push(`Größe ${wi.size} nicht in [${w.size.join(", ")}]`);
+  if (w.preview === true && !profile.preview) reasons.push("keine Preview im Projektprofil");
+  if (w.preview === false && profile.preview) reasons.push("Preview im Projektprofil konfiguriert");
+  return reasons.join("; ") || "Bedingung trifft nicht zu";
+}
+
 function gateEvents(ctx: PhaseContext, wi: WorkItem, results: GateResult[]) {
   for (const r of results) ctx.emit(wi, `gate.${r.status}`, { gate_result_id: r.id, name: r.name, exitCode: r.exitCode, durationMs: r.durationMs });
 }
@@ -379,6 +429,8 @@ export function createOrchestrator(opts: OrchestratorOptions) {
   const auto = new Set(opts.approvals?.auto ?? []);
   ensureLeaseSchema(store);
   ensureSlotSchema(store);
+  // Previews eines abgebrochenen Vorlaufs beenden (PID-Dateien unter <home>/previews).
+  cleanupStalePreviews(join(home, "previews"));
   const budgetUsed =
     opts.budgetUsed ??
     (() =>
@@ -413,12 +465,20 @@ export function createOrchestrator(opts: OrchestratorOptions) {
     role: R,
     model: Model,
     prompt: string,
+    roleOpts: RunRoleOptions = {},
   ): Promise<{ ok: true; output: z.infer<(typeof ROLE_OUTPUTS)[R]> } | { ok: false; feedback: string }> {
     const spanId = `run_${randomBytes(5).toString("hex")}`;
     const profile = loadProjectProfile(wi.projectPath);
     const gp = loadGateProfile(pluginRoot, profile.gate_profile);
     const hookLog = join(home, "hooklogs", `${spanId}.jsonl`);
-    const env: Record<string, string> = { USAC_HOOK_LOG: hookLog, USAC_PROTECTOR_MODE: profile.protector.mode, USAC_WORK_ITEM: wi.id };
+    // Test-DB und Zusatzumgebung der Phase zuerst; die USAC_*-Variablen der Hooks ueberschreibt keine Phase.
+    const env: Record<string, string> = {
+      ...(state(store.getWorkItem(wi.id) ?? wi).testDbEnv ?? {}),
+      ...roleOpts.env,
+      USAC_HOOK_LOG: hookLog,
+      USAC_PROTECTOR_MODE: profile.protector.mode,
+      USAC_WORK_ITEM: wi.id,
+    };
     if (GATEGUARD_ROLES.has(role) && profile.gateguard.enabled) env.USAC_GATEGUARD = "1";
     const networkAllow = validateHosts([...new Set([...gp.network_allow, ...profile.network.allow])]);
     emit(wi, "run.started", { role, model }, spanId, `role:${role}`);
@@ -436,6 +496,7 @@ export function createOrchestrator(opts: OrchestratorOptions) {
         timeoutMs: limits.runTimeoutMs,
         env,
         networkAllow,
+        ...(roleOpts.disallowedTools?.length ? { disallowedTools: roleOpts.disallowedTools } : {}),
       },
       (e) => {
         if (e.kind === "usage" && e.context !== undefined) {
@@ -519,6 +580,20 @@ export function createOrchestrator(opts: OrchestratorOptions) {
     };
   }
 
+  /** Loescht die Test-DB eines beendeten Auftrags (done/failed/escalated); Fehler werden gemeldet, nicht geworfen. */
+  async function dropDb(wi: WorkItem) {
+    const env = state(wi).testDbEnv;
+    if (!env || !wi.worktree) return;
+    const cfg = loadProjectProfile(wi.projectPath).test_db;
+    try {
+      if (cfg) await dropTestDb({ wiId: wi.id, cwd: wi.worktree, cfg });
+      wi = save(wi, { testDbEnv: undefined });
+      emit(wi, "testdb.dropped", { kind: cfg?.kind ?? null });
+    } catch (err) {
+      emit(wi, "testdb.drop_failed", { reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   // ---- Oeffentliche API ----------------------------------------------------------------
 
   return {
@@ -574,28 +649,56 @@ export function createOrchestrator(opts: OrchestratorOptions) {
             `Workflow "${workflow.name}": kein Handler fuer Phase ${missing.map((n) => `"${n}"`).join(", ")} (registerPhase fehlt)`,
           );
         }
+        /**
+         * Geht ab Index `from` zur ersten Phase, deren `when` fuer Auftrag und Projekt zutrifft
+         * (activePhases, mit der aktuellen Groesse); uebersprungene Phasen werden gemeldet.
+         * Ohne weitere Phase ist der Auftrag fertig.
+         */
+        const advance = (cur: WorkItem, from: number): WorkItem => {
+          const active = new Set(activePhases(workflow, cur, profile).map((p) => p.name));
+          for (let i = from; i < workflow.phases.length; i++) {
+            const p = workflow.phases[i]!;
+            if (active.has(p.name)) return save(cur, { phase: p.name });
+            emit(cur, "phase.skipped", { name: p.name, reason: skipReason(p, cur, profile) });
+          }
+          cur = save(cur, { phase: "done" }, { status: "done" });
+          emit(cur, "workitem.done", { branch: cur.branch });
+          return cur;
+        };
         // Startphase kommt aus dem Workflow, nicht aus dem Standardwert von state().
-        if (!(wi.state as Partial<State> | null)?.phase) wi = save(wi, { phase: workflow.phases[0]!.name });
+        if (!(wi.state as Partial<State> | null)?.phase) wi = advance(wi, 0);
         for (let steps = 0; ; steps++) {
           const current: string = state(wi).phase;
-          if (current === "done") break;
+          if (current === "done" || wi.status === "done") break;
           if (steps >= MAX_PHASE_STEPS) {
             throw new Error(`Schutzgrenze erreicht: ${MAX_PHASE_STEPS} Phasenschritte in einem Lauf (Endlosschleife bei Phase "${current}"?)`);
           }
           const idx = workflow.phases.findIndex((p) => p.name === current);
           if (idx < 0) throw new Error(`Phase "${current}" steht nicht im Workflow "${workflow.name}"`);
+          // Ziel eines Sprungs oder Resume, dessen Bedingung nicht (mehr) zutrifft: weiter zur naechsten.
+          if (!activePhases(workflow, wi, profile).some((p) => p.name === current)) {
+            wi = advance(wi, idx);
+            continue;
+          }
           wi = await getPhase(current)!(wi, context(workflow.phases[idx]!, workflow, profile, gp));
           if (wi.status === "awaiting_approval") return { status: "awaiting_approval", branch: wi.branch };
           if (wi.status === "queued") return { status: "queued", branch: wi.branch }; // z. B. lease.wait
           if (wi.status === "done") break;
-          if (state(wi).phase !== current) continue; // Sprung, z. B. review -> implement
-          const next = workflow.phases[idx + 1];
-          if (next) {
-            wi = save(wi, { phase: next.name });
-          } else {
-            wi = save(wi, { phase: "done" }, { status: "done" });
-            emit(wi, "workitem.done", { branch: wi.branch });
+          const target = state(wi).phase;
+          if (target !== current) {
+            // Sprung, z. B. review -> implement. Ein Ziel, das der Workflow nicht hat (verify in
+            // dependency-update ohne implement), kann niemand abarbeiten: dann entscheidet ein Mensch.
+            if (!workflow.phases.some((p) => p.name === target)) {
+              const lastFailure = state(wi).lastFailure;
+              wi = save(wi, { phase: current });
+              throw new Escalate(
+                `Phase "${current}" verlangt Ruecksprung nach "${target}", den Workflow "${workflow.name}" nicht hat` +
+                  (lastFailure ? `:\n${lastFailure}` : ""),
+              );
+            }
+            continue;
           }
+          wi = advance(wi, idx + 1);
         }
         return { status: wi.status, branch: wi.branch };
       } catch (err) {
@@ -610,7 +713,10 @@ export function createOrchestrator(opts: OrchestratorOptions) {
         releaseSlot(store, id);
         // Leases bleiben bei awaiting_approval und queued erhalten (offene Entscheidung 2 im Plan).
         const cur = store.getWorkItem(id);
-        if (cur && FINAL_STATUSES.has(cur.status)) releaseLeases(store, id);
+        if (cur && FINAL_STATUSES.has(cur.status)) {
+          releaseLeases(store, id);
+          await dropDb(cur);
+        }
       }
     },
 

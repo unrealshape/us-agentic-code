@@ -61,9 +61,18 @@ type TeamState = {
   qaTests?: string[];
   securityGateOutput?: string;
   reportPath?: string;
+  reportQuestions?: number;
+  reportApprovalId?: number;
+  reportRounds?: number;
+  reportFeedback?: string;
+  /** Umgebung der Test-Datenbank (setup im Orchestrator). */
+  testDbEnv?: Record<string, string>;
 };
 
 const st = (ctx: PhaseContext, wi: WorkItem) => ctx.state(wi) as TeamState;
+
+/** Umgebung der Test-Datenbank fuer Gates und Preview (leer ohne `test_db`). */
+const dbEnv = (ctx: PhaseContext, wi: WorkItem): Record<string, string> => st(ctx, wi).testDbEnv ?? {};
 
 /** Eine Zeile je Feld: Zeilenumbrueche wuerden Markdown und Commit-Betreff zerbrechen. */
 const line = (s: string) => s.replace(/\s*[\r\n]+\s*/g, " ").trim();
@@ -228,7 +237,7 @@ export function createTeamHandlers(deps: TeamDeps = {}): Record<TeamPhase, Phase
     const cfg = ctx.profile.preview;
     if (!cfg) return {};
     try {
-      const p = await startPreview({ cwd: wi.worktree!, cfg, env: {}, pidDir: join(ctx.home, "previews"), id: wi.id });
+      const p = await startPreview({ cwd: wi.worktree!, cfg, env: dbEnv(ctx, wi), pidDir: join(ctx.home, "previews"), id: wi.id });
       ctx.emit(wi, "preview.started", { url: p.url });
       return { preview: p };
     } catch (e) {
@@ -345,7 +354,7 @@ export function createTeamHandlers(deps: TeamDeps = {}): Record<TeamPhase, Phase
         feedback = res.feedback;
         continue;
       }
-      const stageCtx: StageContext = { workItemType: wi.type, baseRef: base, env: {} };
+      const stageCtx: StageContext = { workItemType: wi.type, baseRef: base, env: dbEnv(ctx, wi) };
       const run = await runStages(ctx.store, wi.id, gp, wi.worktree!, 2, stageCtx);
       gateEvents(ctx, wi, run.results);
       if (!run.passed) {
@@ -404,7 +413,7 @@ export function createTeamHandlers(deps: TeamDeps = {}): Record<TeamPhase, Phase
         wi = ctx.save(wi, { qaTests: tests, ...(sha && s.baseRef ? { baseRef: sha } : {}) });
         s = st(ctx, wi);
       }
-      const run = await runStages(ctx.store, wi.id, gp, wi.worktree!, 3, { workItemType: wi.type, baseRef: await diffBase(wi, ctx), env }, 3);
+      const run = await runStages(ctx.store, wi.id, gp, wi.worktree!, 3, { workItemType: wi.type, baseRef: await diffBase(wi, ctx), env: { ...dbEnv(ctx, wi), ...env } }, 3);
       gateEvents(ctx, wi, run.results);
       if (!run.passed) {
         ctx.emit(wi, "qa.red", { files: s.qaTests });
@@ -428,7 +437,7 @@ export function createTeamHandlers(deps: TeamDeps = {}): Record<TeamPhase, Phase
     const started = await preview(wi, ctx);
     try {
       if (started.error) return fail(`Preview startet nicht:\n${started.error}`);
-      const env: Record<string, string> = started.preview ? { BASE_URL: started.preview.url } : {};
+      const env: Record<string, string> = { ...dbEnv(ctx, wi), ...(started.preview ? { BASE_URL: started.preview.url } : {}) };
       const criteria = await criteriaContext(wi, ctx);
       const stageCtx: StageContext = { workItemType: wi.type, baseRef: await diffBase(wi, ctx), env, ...(criteria ? { criteria } : {}) };
       const run = await runStages(ctx.store, wi.id, gp, wi.worktree!, 6, stageCtx, 3);
@@ -527,7 +536,9 @@ export function createTeamHandlers(deps: TeamDeps = {}): Record<TeamPhase, Phase
     for (let attempt = 1; attempt <= DESIGN_ATTEMPTS; attempt++) {
       const base = await git(wi.worktree!, "rev-parse", "HEAD");
       const before = new Set(await changedFiles(wi.worktree!, base));
-      const res = await ctx.runRole(wi, "architect", m.model, researchPrompt(wi, feedback), { disallowedTools: RESEARCH_DISALLOWED });
+      // Notiz einer Ablehnung des Berichts (approve_report) bleibt erhalten, auch bei Schema-Fehlern.
+      const fb = [s.reportFeedback, feedback].filter(Boolean).join("\n\n") || undefined;
+      const res = await ctx.runRole(wi, "architect", m.model, researchPrompt(wi, fb), { disallowedTools: RESEARCH_DISALLOWED });
       // Spike aendert keinen Code: alles ausser dem (vom Orchestrator gerenderten) Bericht wird verworfen.
       const foreign = await discardForeign(wi, before, base, () => false);
       if (foreign.length) ctx.emit(wi, "anticheat.violation", { role: "architect", phase: "research", paths: foreign });
@@ -539,10 +550,49 @@ export function createTeamHandlers(deps: TeamDeps = {}): Record<TeamPhase, Phase
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, renderSpikeReport(wi, res.output));
       ctx.emit(wi, "spike.report", { path: reportPath, model: m.model, questions: res.output.questions.length });
-      return ctx.save(wi, { reportPath });
+      return ctx.save(wi, { reportPath, reportQuestions: res.output.questions.length, reportFeedback: undefined });
     }
     throw new Escalate(`Kein gültiger Spike-Bericht nach ${DESIGN_ATTEMPTS} Versuchen`);
   };
 
   return { design, environment, qa, verify, security, characterize, research };
 }
+
+/** Hoechstzahl an Berichts-Runden im Spike; die dritte Ablehnung eskaliert. */
+export const REPORT_ROUNDS = 3;
+const REPORT_DENIED_WITHOUT_NOTE = "Bericht abgelehnt ohne Begründung. Prüfe Befunde und Optionen erneut und stelle Rückfragen.";
+
+/**
+ * Freigabe `report` des Spike-Berichts (wie `approve_spec`): erteilt → weiter (Commit in `integrate`),
+ * abgelehnt → Bericht verwerfen und `research` mit der Notiz neu starten; die dritte Ablehnung eskaliert.
+ * Offene Fragen im Bericht brauchen immer einen Menschen, auch bei automatischer Freigabe.
+ */
+export const approveReport: PhaseHandler = async (wi, ctx) => {
+  const { store } = ctx;
+  const s = st(ctx, wi);
+  if (!s.reportPath) throw new Error("approve_report ohne Bericht im Zustand");
+  let approval = s.reportApprovalId ? store.getApproval(s.reportApprovalId) : null;
+  if (!approval) {
+    approval = store.createApproval(wi.id, "report", { path: s.reportPath, title: wi.title });
+    ctx.emit(wi, "approval.requested", { approval_id: approval.id, kind: "report", path: s.reportPath });
+    wi = ctx.save(wi, { reportApprovalId: approval.id });
+    if (ctx.autoApprovals.has("report") && !s.reportQuestions) {
+      store.resolveApproval(approval.id, true, "automatisch (Konfiguration)");
+      approval = store.getApproval(approval.id)!;
+    }
+  }
+  if (approval.status === "pending") return ctx.save(wi, {}, { status: "awaiting_approval" });
+  if (approval.status === "denied") {
+    const round = (s.reportRounds ?? 0) + 1;
+    ctx.emit(wi, "report.denied", { approval_id: approval.id, round, note: approval.note });
+    if (round >= REPORT_ROUNDS) throw new Escalate(`Bericht ${round}-mal abgelehnt: ${approval.note ?? ""}`);
+    rmSync(join(wi.worktree!, s.reportPath), { force: true });
+    return ctx.save(
+      wi,
+      { phase: "research", reportPath: undefined, reportApprovalId: undefined, reportRounds: round, reportFeedback: approval.note || REPORT_DENIED_WITHOUT_NOTE },
+      { status: "running" },
+    );
+  }
+  ctx.emit(wi, "approval.granted", { approval_id: approval.id, kind: "report" });
+  return ctx.save(wi, {}, { status: "running" });
+};
