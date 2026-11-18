@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import type { Claim, Evidence } from "@usac/shared";
+import { loadGraph } from "./graph";
 import type { Store } from "./store";
 
 /**
@@ -12,6 +13,8 @@ export interface EvidenceContext {
   store: Store;
   workItemId: string;
   urlAllowlist?: string[];
+  /** Prueft einen Memory-Beleg; Rueckgabe `null` = gueltig, sonst Fehlermeldung. */
+  memory?: { check(id: string, cwd: string): string | null };
 }
 
 export interface EvidenceError {
@@ -21,24 +24,28 @@ export interface EvidenceError {
 
 const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
 
+/** Prueft, dass `quote` in `path` (relativ zu `cwd`) in den Zeilen `lines` steht. */
+function checkQuote(cwd: string, path: string, lines: [number, number], quote: string): string | null {
+  if (isAbsolute(path) || path.split(/[\\/]/).includes("..")) return `Pfad ${path} liegt ausserhalb des Projekts`;
+  const full = join(cwd, path);
+  if (!existsSync(full)) return `Datei ${path} existiert nicht`;
+  const rel = relative(realpathSync(cwd), realpathSync(full));
+  if (rel.startsWith("..")) return `Pfad ${path} liegt ausserhalb des Projekts`;
+  const content = readFileSync(full, "utf8").split("\n");
+  const [start, end] = lines;
+  if (start > end) return `Zeilenbereich ${start}-${end} ist ungueltig`;
+  if (end > content.length) return `${path} hat nur ${content.length} Zeilen, Beleg nennt ${start}-${end}`;
+  const excerpt = normalize(content.slice(start - 1, end).join("\n"));
+  if (!excerpt.includes(normalize(quote))) {
+    return `Zitat steht nicht in ${path}:${start}-${end} (dort steht: "${excerpt.slice(0, 120)}")`;
+  }
+  return null;
+}
+
 export function checkEvidence(ev: Evidence, ctx: EvidenceContext): string | null {
   switch (ev.type) {
-    case "file": {
-      if (isAbsolute(ev.path) || ev.path.split(/[\\/]/).includes("..")) return `Pfad ${ev.path} liegt ausserhalb des Projekts`;
-      const full = join(ctx.cwd, ev.path);
-      if (!existsSync(full)) return `Datei ${ev.path} existiert nicht`;
-      const rel = relative(realpathSync(ctx.cwd), realpathSync(full));
-      if (rel.startsWith("..")) return `Pfad ${ev.path} liegt ausserhalb des Projekts`;
-      const lines = readFileSync(full, "utf8").split("\n");
-      const [start, end] = ev.lines;
-      if (start > end) return `Zeilenbereich ${start}-${end} ist ungueltig`;
-      if (end > lines.length) return `${ev.path} hat nur ${lines.length} Zeilen, Beleg nennt ${start}-${end}`;
-      const excerpt = normalize(lines.slice(start - 1, end).join("\n"));
-      if (!excerpt.includes(normalize(ev.quote))) {
-        return `Zitat steht nicht in ${ev.path}:${start}-${end} (dort steht: "${excerpt.slice(0, 120)}")`;
-      }
-      return null;
-    }
+    case "file":
+      return checkQuote(ctx.cwd, ev.path, ev.lines, ev.quote);
     case "gate": {
       const g = ctx.store.getGate(ev.gate_result_id);
       if (!g || g.workItemId !== ctx.workItemId) return `Gate-Ergebnis ${ev.gate_result_id} existiert nicht fuer diesen Auftrag`;
@@ -55,11 +62,19 @@ export function checkEvidence(ev: Evidence, ctx: EvidenceContext): string | null
       if (!a || a.status !== "granted") return `Freigabe ${ev.approval_id} existiert nicht oder ist nicht erteilt`;
       return null;
     }
-    case "memory":
-      return "Memory-Belege sind in Phase 0 noch nicht verfuegbar";
-    case "graph":
-      // Echte Pruefung folgt in Phase 3, Task 2 (graph.ts); bis dahin gilt ein Graph-Beleg als ungueltig.
-      return "Graph-Belege sind noch nicht pruefbar";
+    case "memory": {
+      if (!ctx.memory) return `Memory-Beleg ${ev.id}: Memory nicht verfügbar`;
+      const problem = ctx.memory.check(ev.id, ctx.cwd);
+      return problem ? `Memory-Beleg ${ev.id} ist ungueltig: ${problem}` : null;
+    }
+    case "graph": {
+      const nodes = loadGraph(ctx.cwd);
+      if (!nodes) return `Graph-Beleg ${ev.node_id}: kein Graph (graphify-out/graph.json fehlt oder ist unlesbar)`;
+      const node = nodes.find((n) => n.id === ev.node_id);
+      if (!node) return `Knoten ${ev.node_id} steht nicht im Graph`;
+      if (node.path !== ev.path.replace(/\\/g, "/")) return `Knoten ${ev.node_id} gehoert zu ${node.path}, Beleg nennt ${ev.path}`;
+      return checkQuote(ctx.cwd, ev.path, ev.lines, ev.quote);
+    }
   }
 }
 

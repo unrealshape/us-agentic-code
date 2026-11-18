@@ -12,7 +12,7 @@ Das Team soll ein Projekt kennenlernen (Onboarding mit bestätigtem Profil), Wis
 
 Alle Wissensquellen liefern Fundstellen als `Evidence` und laufen durch dieselbe Belegprüfung (`checkEvidence`) wie Rollen-Ausgaben. Neu in `packages/shared/src/index.ts`:
 
-- `GraphEvidence = { type: "graph", node_id, path, lines, quote }` als Teil von `Evidence`. Bis Task 2 lehnt `checkEvidence` Graph-Belege ab („Graph-Belege sind noch nicht pruefbar“).
+- `GraphEvidence = { type: "graph", node_id, path, lines, quote }` als Teil von `Evidence`. `checkEvidence` prüft ihn über `loadGraph` (`graph.ts`): Knoten existiert, `path` gleich Knotenpfad, dann dieselbe Zitatprüfung wie bei `file`. Memory-Belege delegiert `checkEvidence` an `EvidenceContext.memory`; ohne Rückruf sind sie ungültig („Memory nicht verfügbar“).
 - `ExplorerOutput` (Sprachen, Befehle, höchstens 10 Konventionen als `Claim` mit Stufe), `LearnerOutput` (höchstens 3 `InstinctProposal` mit mindestens einer Ereignis-ID, höchstens 5 `MemoryProposal` mit mindestens einem Datei-Beleg), beide in `ROLE_OUTPUTS`.
 - `WorkItemType` um `onboarding` erweitert.
 - Die JSON-Schemas (`schemas/*.schema.json`, erzeugt von `scripts/gen-schemas.ts`) kennen zusätzlich die Beleg-Varianten `graph` und `memory`.
@@ -54,9 +54,9 @@ Keine Regel und kein Instinct gilt ohne Freigabe durch den Nutzer (ADR 0003). Ex
 
 ## Offene Fragen
 
-- **Graph-Format von `graph.json`:** Welche Felder nennen in `graphify-out/graph.json` Knoten-ID, Label, Quelldatei und Zeile? Nicht geraten (Regel 2). Beantwortet wird die Frage durch `tests/fixtures/graph/QUELLE.md` aus Task 2 (Graphify-Version, Befehl, Datum, Feldnamen aus einem echten Lauf unter Linux/WSL2). Bis dahin sind Graph-Belege nicht prüfbar und die Lückensuche überspringt den Graph.
+- ~~**Graph-Format von `graph.json`**~~ – beantwortet in `tests/fixtures/graph/QUELLE.md` (graphify 0.9.65, `graphify update .`, 2026-11-18): `id`, `label`, `source_file`, `source_location` (`L<zeile>`). Der Lauf fand unter Windows statt, nicht unter Linux/WSL2; ein Abgleich unter Linux steht noch aus.
 
 ## Folgen
 
-- Rollen-Ausgaben mit `graph`- oder `memory`-Belegen sind schema-gültig, werden aber bis Task 2 bzw. Task 3 von der Belegprüfung abgelehnt.
+- Rollen-Ausgaben mit `graph`-Belegen werden mechanisch geprüft; `memory`-Belege gelten erst, wenn der Aufrufer `EvidenceContext.memory` setzt (Task 3).
 - Neue Bausteine sind reine Funktionen oder SQLite-Module ohne LLM; das hält den Orchestrator deterministisch.
