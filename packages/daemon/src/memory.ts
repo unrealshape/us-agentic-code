@@ -75,6 +75,16 @@ export function openMemory(path: string): Database {
     quote TEXT NOT NULL
   )`);
   db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(text, kind, content='entries', content_rowid='id')`);
+  // Team-Abgleich (sync.ts): je Konflikt-Fingerabdruck die Freigabe und die gespeicherte Entscheidung.
+  db.run(`CREATE TABLE IF NOT EXISTS memory_conflicts (
+    fingerprint TEXT PRIMARY KEY,
+    uid TEXT NOT NULL,
+    reason TEXT NOT NULL CHECK (reason IN ('status','anchor')),
+    approval_id INTEGER NOT NULL,
+    choice TEXT CHECK (choice IN ('local','remote','both')),
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+  )`);
   migrate(db);
   return db;
 }
@@ -250,8 +260,9 @@ const fileName = (kind: string, uid: string) => `${kind.replace(/[^\w-]/g, "_")}
 
 /**
  * Schreibt je verified-Eintrag `<kind>-<uid>.md` nach outDir. Eintraege mit Freigabe-Beleg bleiben lokal.
- * Entfernt nur Dateien eigener, nicht mehr exportierter Eintraege und Dateien im alten Muster `<kind>-<id>.md`;
- * Dateien fremder Rechner (unbekannte UID) und sonstige Dateien bleiben. Liefert die Anzahl.
+ * Entfernt nur Dateien eigener, nicht mehr exportierter Eintraege und Dateien im alten Muster `<kind>-<id>.md`
+ * (alte Exporte werden nie importiert). Dateien fremder Rechner bleiben: unbekannte UID, importierte Eintraege
+ * (Herkunft `remote`) und UIDs mit erkanntem Abgleich-Konflikt. Sonstige Dateien bleiben. Liefert die Anzahl.
  */
 export function exportVerified(db: Database, outDir: string): number {
   const rows = db
@@ -265,7 +276,8 @@ export function exportVerified(db: Database, outDir: string): number {
     names.add(name);
     writeFileSync(join(outDir, name), toMarkdown(e));
   }
-  const known = db.query("SELECT 1 FROM entries WHERE uid = ?");
+  const known = db.query(`SELECT 1 FROM entries WHERE uid = ?1 AND origin = 'local'
+    AND NOT EXISTS (SELECT 1 FROM memory_conflicts WHERE uid = ?1)`);
   for (const f of readdirSync(outDir)) {
     if (names.has(f)) continue;
     if (EXPORT_FILE.test(f)) {
