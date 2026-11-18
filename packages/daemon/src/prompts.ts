@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AcceptanceCriterion, AnalystOutput, Slice } from "@usac/shared";
 import type { WorkItem } from "./store";
 
 /** Liest den Rollen-Prompt aus agents/<rolle>.md (ohne Frontmatter). */
@@ -30,10 +31,58 @@ export function taskBlock(wi: WorkItem): string {
   return `Auftrag (${wi.type}, Groesse ${wi.size}): ${wi.title}\n\n${wi.description}`;
 }
 
-export function testEngineerPrompt(wi: WorkItem, feedback?: string): string {
+export function analystPrompt(wi: WorkItem, feedback?: string): string {
   return [
     taskBlock(wi),
-    `Deine Aufgabe: Schreibe ZUERST einen ausfuehrbaren Abnahmetest, der das erwartete Verhalten aus Nutzersicht prueft.
+    `Deine Aufgabe: Mache aus dem Auftrag eine Spec mit pruefbaren Akzeptanzkriterien.
+- Du schreibst keine Dateien. Liefere die Spec ausschliesslich als JSON; spec/feature.md erzeugt der Orchestrator daraus.
+- Jedes Kriterium hat eine ID (AC-1, AC-2, ...) und given, when, then; "source" ist task, code oder user.
+- Jedes Kriterium ist beobachtbar und als automatischer Test pruefbar (Eingabe, erwartetes Ergebnis, Randfall).
+- Grenze in "out_of_scope" ab, was nicht Teil des Auftrags ist.
+- Unklares wird zur Frage in "questions", nicht zur Annahme.`,
+    feedback ? `Rueckmeldung zum letzten Versuch:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function criteriaBlock(criteria: AcceptanceCriterion[]): string {
+  return criteria.map((c) => `- ${c.id}: Gegeben ${c.given}, wenn ${c.when}, dann ${c.then}`).join("\n");
+}
+
+export function techLeadPrompt(wi: WorkItem, spec: AnalystOutput, feedback?: string): string {
+  return [
+    taskBlock(wi),
+    `Spec: ${spec.title}\n${spec.summary}\n\nAkzeptanzkriterien:\n${criteriaBlock(spec.criteria)}`,
+    `Deine Aufgabe: Plane rueckwaerts und zerlege die Spec in Slices.
+- Du schreibst keine Dateien. Liefere den Plan ausschliesslich als JSON.
+- Plane höchstens 8 Slices; jeder Slice hat eine ID (S1, S2, ...), einen Titel, Kriterien-IDs, Dateien und depends_on.
+- Jedes Kriterium der Spec gehoert zu mindestens einem Slice.
+- "files" nennt die Dateien, die der Slice aendern darf (Leases); Abhaengigkeiten duerfen keine Zyklen bilden.
+- Stufe die Groesse ein: trivial, small, standard oder large.`,
+    feedback ? `Rueckmeldung zum letzten Versuch:\n${feedback}` : "",
+    PRECISION_RULES,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function testEngineerPrompt(
+  wi: WorkItem,
+  feedback?: string,
+  slice?: { slice: Slice; criteria: AcceptanceCriterion[] },
+): string {
+  return [
+    taskBlock(wi),
+    slice
+      ? `Deine Aufgabe: Schreibe ZUERST ausfuehrbare Tests fuer Slice ${slice.slice.id} (${slice.slice.title}).
+- Nur Tests für diesen Slice; die Tests muessen mit dem aktuellen Code ROT sein.
+- Aendere ausschliesslich Testdateien. Produktivcode ist tabu.
+- Kriterien dieses Slice:
+${criteriaBlock(slice.criteria)}
+- Nenne in "acceptance_tests" die Pfade relativ zum Projektordner.`
+      : `Deine Aufgabe: Schreibe ZUERST einen ausfuehrbaren Abnahmetest, der das erwartete Verhalten aus Nutzersicht prueft.
 - Der Test muss mit dem aktuellen Code ROT sein (er beweist den Fehler bzw. das fehlende Verhalten).
 - Aendere ausschliesslich Testdateien. Produktivcode ist tabu.
 - Lege den Abnahmetest unter spec/acceptance/ ab (oder im Testordner des Projekts).
