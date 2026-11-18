@@ -17,8 +17,19 @@ export const ProjectProfile = z.object({
     .default({ mode: "blockieren" }),
   gateguard: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
   network: z.object({ allow: z.array(z.string()).default([]) }).default({ allow: [] }),
+  /** Projektbefehle aus dem Onboarding (vom Nutzer bestaetigt). */
+  commands: z
+    .object({ build: z.string().optional(), test: z.string().optional(), lint: z.string().optional(), format: z.string().optional() })
+    .optional(),
+  /** Zeitpunkt der Bestaetigung im Onboarding (ISO 8601). */
+  confirmed_at: z.string().optional(),
+  adr: z
+    .object({ dir: z.string().default("docs/adr"), require_for_dependencies: z.boolean().default(true) })
+    .default({ dir: "docs/adr", require_for_dependencies: true }),
 });
 export type ProjectProfile = z.infer<typeof ProjectProfile>;
+/** Profilvorschlag des Onboardings: Profil plus Konventionen (nur Texte, Belege liegen im Auftrag). */
+export type ProfileProposal = ProjectProfile & { conventions: string[] };
 
 export const GateStage = z.object({
   name: z.string(),
