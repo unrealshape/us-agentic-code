@@ -14,6 +14,12 @@ export const RoutingConfig = z.object({
       after_failures: z.number().int().positive().default(2),
     })
     .default({}),
+  fable: z
+    .object({
+      /** Nur diese Rollen duerfen Fable nutzen; sonst Deckel auf Opus. */
+      only_roles: z.array(z.string()).default([]),
+    })
+    .default({}),
   budget: z
     .object({
       fable_needs_approval_above: z.number().min(0).max(1).default(0.75),
@@ -74,6 +80,10 @@ export function resolveModel(cfg: RoutingConfig, role: string, ctx: RouteContext
   }
 
   let model = at(i);
+  if (model === "fable" && !cfg.fable.only_roles.includes(role)) {
+    model = "opus";
+    reasons.push("Fable nur fuer Architekt: Deckel Opus");
+  }
   let needsApproval = false;
   const used = ctx.budgetUsed ?? 0;
   const exempt = cfg.budget.exempt.includes(role);

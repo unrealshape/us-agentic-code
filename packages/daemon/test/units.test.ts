@@ -17,24 +17,27 @@ describe("Routing", () => {
   const cfg = loadRouting(REPO_ROOT);
   test("Standardmodelle je Rolle", () => {
     expect(resolveModel(cfg, "implementer").model).toBe("sonnet");
-    expect(resolveModel(cfg, "security-reviewer").model).toBe("fable");
     expect(resolveModel(cfg, "explorer").model).toBe("haiku");
-    expect(resolveModel(cfg, "test-engineer", { variant: "acceptance" }).model).toBe("opus");
+    expect(resolveModel(cfg, "test-engineer", { variant: "acceptance" }).model).toBe("sonnet");
     expect(resolveModel(cfg, "test-engineer", { variant: "slices" }).model).toBe("sonnet");
+    expect(resolveModel(cfg, "security-reviewer").model).toBe("opus");
   });
-  test("Groesse large hebt Architect und Reviewer", () => {
-    expect(resolveModel(cfg, "code-reviewer", { size: "large" }).model).toBe("fable");
+  test("Fable nur fuer den Architekten, alle anderen Rollen max. Opus", () => {
+    expect(resolveModel(cfg, "architect", { size: "large" }).model).toBe("fable");
+    expect(resolveModel(cfg, "code-reviewer", { size: "large" }).model).toBe("opus");
     expect(resolveModel(cfg, "implementer", { size: "large" }).model).toBe("sonnet");
+    expect(resolveModel(cfg, "security-reviewer", { failures: 9 }).model).toBe("opus");
   });
-  test("Fehlversuche heben stufenweise, gedeckelt bei Fable", () => {
+  test("Fehlversuche heben stufenweise, gedeckelt bei Opus ausser beim Architekten", () => {
     expect([0, 1, 2, 3, 4, 9].map((f) => resolveModel(cfg, "implementer", { failures: f }).model)).toEqual([
-      "sonnet", "sonnet", "opus", "opus", "fable", "fable",
+      "sonnet", "sonnet", "opus", "opus", "opus", "opus",
     ]);
+    expect(resolveModel(cfg, "architect", { failures: 4 }).model).toBe("fable");
   });
-  test("Kontingent bremst, Security ist ausgenommen", () => {
+  test("Kontingent bremst, Security ist ausgenommen, Fable braucht Freigabe", () => {
     expect(resolveModel(cfg, "code-reviewer", { budgetUsed: 0.95 }).model).toBe("sonnet");
-    expect(resolveModel(cfg, "security-reviewer", { budgetUsed: 0.95 }).model).toBe("fable");
-    const r = resolveModel(cfg, "implementer", { failures: 4, budgetUsed: 0.8 });
+    expect(resolveModel(cfg, "security-reviewer", { budgetUsed: 0.95 }).model).toBe("opus");
+    const r = resolveModel(cfg, "architect", { failures: 4, budgetUsed: 0.8 });
     expect(r.model).toBe("fable");
     expect(r.needsApproval).toBe(true);
   });
