@@ -8,6 +8,7 @@ import type { Size, WorkItemType } from "@usac/shared";
 import { sh } from "./exec";
 import { excludeFromGit, hasGraphify, updateGraph } from "./graph";
 import { createOrchestrator } from "./orchestrator";
+import "./registry-setup";
 import { ClaudeRunner } from "./runner/claude";
 import { openStore } from "./store";
 
