@@ -31,8 +31,8 @@ export type AppDeps = {
   guard?: Guard;
 };
 
-/** Erster Montag nach dem ersten Ereignis (Installation); Grundlage der Sprints (ADR 0003). */
-function defaultSprintStart(store: Store, now: Date): Date {
+/** Erster Montag nach dem ersten Ereignis (Installation); Grundlage der Zeitraeume (ADR 0003). */
+function defaultPeriodStart(store: Store, now: Date): Date {
   const first = store.events()[0];
   const base = first ? new Date(first.ts) : now;
   const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
@@ -73,7 +73,7 @@ export function createApp(store: Store, deps?: AppDeps): Hono {
 
   const now = new Date();
   const routing = loadRouting(pluginRoot, overridePath);
-  registerMetrics(app, { store, routing, sprintStart: defaultSprintStart(store, now), sprintDays: 7 });
+  registerMetrics(app, { store, routing, periodStart: defaultPeriodStart(store, now), periodDays: 7 });
 
   app.get("/api/commands", (c) => c.json(commandsData(store)));
   registerPalette(app, store);

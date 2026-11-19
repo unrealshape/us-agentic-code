@@ -2,7 +2,7 @@
 
 Status: **Entwurf**
 Datum: 2026-11-18
-Bezug: `docs/superpowers/plans/2026-11-18-phase-5.md`, ADR 0002 (UI v1, Hono), ADR 0003 (Scrum-Ablauf, Metriken, Sprint), Regeln 2, 3, 5 und 6 aus `CLAUDE.md`
+Bezug: `docs/superpowers/plans/2026-11-18-phase-5.md`, ADR 0002 (UI v1, Hono), ADR 0003 (Scrum-Ablauf, Metriken, Zeitraum), Regeln 2, 3, 5 und 6 aus `CLAUDE.md`
 
 ## Kontext
 
@@ -12,7 +12,7 @@ Phase 5 erweitert die UI v1 zu einer vollen Steuerungsoberfläche und nutzt das 
 
 | Baustein | Datei | Kurzbeschreibung |
 |---|---|---|
-| Metriken | `packages/daemon/src/metrics.ts` | Reine Funktion `computeMetrics` über das Event-Log: Velocity und Eskalationsrate je Sprint, Tokens, Fehlversuche je Auftrag, Erstversuchs-Quote und Turns je Rolle und Modell, Wartezeit auf Freigaben. Keine zusätzliche Datenquelle (ADR 0003). |
+| Metriken | `packages/daemon/src/metrics.ts` | Reine Funktion `computeMetrics` über das Event-Log: Velocity und Eskalationsrate je Zeitraum, Tokens, Fehlversuche je Auftrag, Erstversuchs-Quote und Turns je Rolle und Modell, Wartezeit auf Freigaben. Keine zusätzliche Datenquelle (ADR 0003). |
 | Herabstufung | `packages/daemon/src/downgrade.ts`, `routing.ts` | Vorschläge nach festen Schwellen, Übernahme nur als Freigabe, Override in `<home>/routing.override.yaml`, automatische Rücknahme bei Verschlechterung. |
 | Pipeline-Graph | UI | Ablauf eines Auftrags als inline SVG. |
 | Review-Ansicht | UI | Diff (eigener Parser/Renderer) und Freigabe-Knöpfe; schreibende Aktionen über gemeinsamen Schutz (Token, Origin, Host). |
@@ -25,9 +25,9 @@ Phase 5 erweitert die UI v1 zu einer vollen Steuerungsoberfläche und nutzt das 
 ### Definitionen der Metriken (`computeMetrics`)
 
 - Eine Schleife über die nach `id` sortierten Events, Gruppierung nach `traceId` (= Work-Item-ID).
-- **Sprint:** Zeitbox ab `sprintStart` in `sprintDays`-Schritten, lückenlos bis zum Sprint, der `now` (oder das letzte Event) enthält. Leeres Log ergibt leere Listen. Events vor `sprintStart` zählen in keinem Sprint.
-- **done/escalated/failed:** Anzahl `workitem.done`, `workitem.escalated`, `workitem.failed` im Sprint. **Eskalationsrate** = `escalated / (done + escalated + failed)`, 0 bei keinem Abschluss.
-- **Tokens:** Summe `run.finished.data.tokens.input + output` (je Sprint und je Rolle/Modell).
+- **Zeitraum:** Zeitbox von 7 Tagen (`periodDays`) ab `periodStart`, lückenlos bis zum Zeitraum, der `now` (oder das letzte Event) enthält. Leeres Log ergibt leere Listen. Events vor `periodStart` zählen in keinem Zeitraum.
+- **done/escalated/failed:** Anzahl `workitem.done`, `workitem.escalated`, `workitem.failed` im Zeitraum. **Eskalationsrate** = `escalated / (done + escalated + failed)`, 0 bei keinem Abschluss.
+- **Tokens:** Summe `run.finished.data.tokens.input + output` (je Zeitraum und je Rolle/Modell).
 - **Fehlversuche je Auftrag:** Implementer-`run.started` im Auftrag minus 1, wenn `acceptance.green` vorkommt, sonst die Anzahl. Nur Aufträge mit mindestens einer Implementer-Session.
 - **Erstversuch erfolgreich:** die erste Session einer Rolle im Auftrag endet mit `run.finished.ok` und bis zur nächsten Session derselben Rolle folgt kein `output.invalid` oder `evidence.invalid` dieser Rolle. Für `implementer` zusätzlich kein `review.changes_requested` und kein `gate.failed` vor dem nächsten `acceptance.green`. `review.changes_requested` wird nur dem Implementer angelastet, weil Review-Befunde zur Implementierung zurückführen; sonst würde z. B. jeder Analyst-Erstversuch durch spätere Reviews entwertet. Die Quote gilt für das Modell der ersten Session.
 - **Eskalationen je Rolle/Modell:** ein `workitem.escalated` zählt für Rolle und Modell der letzten `run.finished` im Auftrag.
@@ -40,7 +40,7 @@ Phase 5 erweitert die UI v1 zu einer vollen Steuerungsoberfläche und nutzt das 
 3. **Schwellen für Vorschläge:** mindestens 20 Läufe, Erstversuchs-Quote ≥ 0,9, keine Eskalation; Probe über 10 Läufe, Rücknahme unter 0,8.
 4. **Ort der Routing-Änderung:** `<home>/routing.override.yaml`; `routing.yaml` im Plugin bleibt unverändert.
 5. **Nachtfenster und Budget:** `22:00-06:00`, 2 000 000 Tokens je Nacht, Kennzeichnung je Auftrag mit `--night`.
-6. **Sprint-Länge für Metriken:** 7 Tage ab erstem Montag nach der Installation, konfigurierbar (ADR 0003, offene Frage 1).
+6. **Zeitraum-Länge für Metriken:** 7 Tage ab Startdatum, konfigurierbar (ADR 0003, offene Frage 1). Das Startdatum ist der erste Montag nach der Installation (Frage 3).
 7. **Plane:** nur selbst gehostet, Token aus Umgebungsvariable, aus ohne Konfiguration; Auftragstyp über Label `usac:<typ>`.
 8. **UI-Schutz:** Token je Serverstart, Origin- und Host-Prüfung, keine Benutzerkonten. UI bindet nur an `127.0.0.1`.
 9. **Diff-Darstellung:** eigener Parser und Renderer, keine Bibliothek.
@@ -61,5 +61,9 @@ Damit kann die UI unter `http://127.0.0.1:<port>` ohne TLS einen Service Worker 
 
 1. Service-Worker-Registrierung und Notifications API unter `http://127.0.0.1` in den tatsächlich genutzten Browsern (Chrome, Firefox, Edge; unter WSL2 vom Windows-Browser aus) praktisch prüfen und PWA-Installierbarkeit ohne HTTPS bestätigen.
 2. Plane-API (Endpunkte, Authentifizierung, Labels) ist erst mit ADR 0011 belegt; bis dahin bleibt die Anbindung aus.
-3. Sprint-Start „erster Montag nach der Installation“: Woher der Installationszeitpunkt stammt (Config oder erstes Event), wird mit der Metrik-Ansicht festgelegt.
+3. Startdatum „erster Montag nach der Installation“: Woher der Installationszeitpunkt stammt (Config oder erstes Event), wird mit der Metrik-Ansicht festgelegt.
 4. Das Event `approval.resolved` existiert im Code bisher nicht; klären, ob es eingeführt oder die Spec auf `approval.granted`/`approval.denied` angepasst wird. `computeMetrics` akzeptiert alle drei.
+
+## Änderung (2026-11-19)
+
+Der Begriff Sprint entfällt. Metriken rechnen mit festen Zeiträumen von 7 Tagen ab Startdatum (`periodStart`, `periodDays`, Feld `periods`, Typ `PeriodMetrics`). Grund: Nutzerwunsch, „ordentlich dokumentieren wie im Entwickler-Alltag“, nicht Scrum.

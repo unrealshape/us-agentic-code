@@ -52,14 +52,14 @@ function barFigure(caption: string, bars: Bar[]): string {
 
 const pct = (x: number): string => `${Math.round(x * 100)} %`;
 
-function sprintsSection(m: Metrics): string {
+function periodsSection(m: Metrics): string {
   const velocity = barFigure(
     "Erledigte Aufträge je Zeitraum (7 Tage)",
-    m.sprints.map((s) => ({ label: `ab ${s.start.slice(0, 10)}`, value: s.done, shown: String(s.done) })),
+    m.periods.map((s) => ({ label: `ab ${s.start.slice(0, 10)}`, value: s.done, shown: String(s.done) })),
   );
   const escalation = barFigure(
     "Eskalationsrate je Zeitraum (7 Tage)",
-    m.sprints.map((s) => ({ label: `ab ${s.start.slice(0, 10)}`, value: s.escalationRate * 100, shown: pct(s.escalationRate) })),
+    m.periods.map((s) => ({ label: `ab ${s.start.slice(0, 10)}`, value: s.escalationRate * 100, shown: pct(s.escalationRate) })),
   );
   return `<h2>Verlauf</h2>${velocity}${escalation}`;
 }
@@ -113,7 +113,7 @@ export function metricsHtml(store: Store, routing: RoutingConfig, opts: MetricsO
   const m = computeMetrics(store.events(), opts);
   const body =
     `${STYLE}<h1>Metriken</h1>` +
-    sprintsSection(m) +
+    periodsSection(m) +
     waitSection(m) +
     tokenSection(m) +
     roleTable(m) +
@@ -122,8 +122,8 @@ export function metricsHtml(store: Store, routing: RoutingConfig, opts: MetricsO
 }
 
 /** Registriert `GET /metrics`. Die Verdrahtung in den Server-Start folgt in Task 10. */
-export function registerMetrics(app: Hono, deps: { store: Store; routing: RoutingConfig; sprintStart: Date; sprintDays: number }): void {
+export function registerMetrics(app: Hono, deps: { store: Store; routing: RoutingConfig; periodStart: Date; periodDays: number }): void {
   app.get("/metrics", (c) =>
-    c.html(metricsHtml(deps.store, deps.routing, { sprintStart: deps.sprintStart, sprintDays: deps.sprintDays, now: new Date() })),
+    c.html(metricsHtml(deps.store, deps.routing, { periodStart: deps.periodStart, periodDays: deps.periodDays, now: new Date() })),
   );
 }

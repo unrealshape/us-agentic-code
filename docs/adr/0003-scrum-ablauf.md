@@ -13,16 +13,16 @@ Das Team arbeitet agil. Der Ablauf im Plugin soll die Scrum-Rollen und -Termine 
 | Scrum | Im Plugin | Wer |
 |---|---|---|
 | Product Owner | du, über Freigaben (H1, H2, Spec) und Priorität im Backlog | Mensch |
-| Scrum Master | Orchestrator (deterministisch): Sprint-Grenzen, WIP-Limit, Eskalation | Code |
+| Scrum Master | Orchestrator (deterministisch): Zeitraum-Grenzen, WIP-Limit, Eskalation | Code |
 | Entwicklungsteam | Agents (Analyst, Tech Lead, Implementer, Reviewer, …) | Modelle, nach `routing.yaml` |
 | Backlog | Work-Items im Store, sortiert nach deiner Priorität | Store |
 
 ## Termine
 
-- **Sprint:** feste Zeitbox, Vorschlag 1 Woche. Ein Sprint endet auch, wenn das Kontingent den Schwellwert erreicht (ab 75 %, siehe ADR 0002). Länge ist konfigurierbar.
-- **Sprint-Planung:** Der Orchestrator zieht Work-Items aus dem Backlog, bis die Kapazität erreicht ist. Kapazität = Kontingent-Budget des Sprints, nicht Stunden. Du bestätigst den Sprint (Freigabe).
+- **Zeitraum:** feste Zeitbox von 7 Tagen ab einem Startdatum (`periodStart`, `periodDays`). Die Zeiträume sind fest: Das Erreichen der Kontingent-Schwelle (ab 75 %, ADR 0002) beendet sie nicht. Länge ist konfigurierbar.
+- **Planung je Zeitraum:** Der Orchestrator zieht Work-Items aus dem Backlog, bis die Kapazität erreicht ist. Kapazität = Kontingent-Budget des Zeitraums, nicht Stunden. Du bestätigst den Zeitraum (Freigabe).
 - **Daily:** kein Meeting. Ein automatischer Statusbericht je Run aus dem Event-Log: erledigt, läuft, blockiert (Freigabe ausstehend oder Eskalation).
-- **Sprint-Review:** Du prüfst die gemergten PRs und die offenen Freigaben im UI.
+- **Review je Zeitraum:** Du prüfst die gemergten PRs und die offenen Freigaben im UI.
 - **Retrospektive:** Die Learner-Rolle (Haiku) schlägt Lernregeln vor, aus Fehlversuchen und Eskalationen. Du entscheidest, ob sie übernommen werden. Keine Regel gilt ohne deine Freigabe.
 
 ## Definition of Done
@@ -38,7 +38,7 @@ Die Prüfung ist mechanisch. Ein Modell darf nicht selbst erklären, dass etwas 
 
 ## Metriken (Vorbereitung für Phase 5)
 
-- Velocity: abgeschlossene Work-Items und Token-Verbrauch je Sprint.
+- Velocity: abgeschlossene Work-Items und Token-Verbrauch je Zeitraum.
 - Fehlversuche je Work-Item, Eskalationsrate.
 - Freigabe-Wartezeit (wie lange ein Run auf dich wartet).
 
@@ -46,10 +46,14 @@ Die Metriken entstehen aus dem Event-Log. Es gibt keine zusätzlichen Datenquell
 
 ## Entscheidungen, die noch offen sind
 
-1. Länge des Sprints: 1 Woche oder ein anderer Rhythmus?
+1. Länge des Zeitraums: beantwortet mit 7 Tagen ab Startdatum (siehe Änderung).
 2. Wer legt Work-Items an: du direkt, oder der Analyst aus einer Idee?
-3. Dürfen Work-Items während eines laufenden Sprints in den Sprint wandern (Scope-Änderung)? Scrum sagt nein, es kann aber für Notfälle nötig sein.
+3. Dürfen Work-Items während eines laufenden Zeitraums in einen anderen wandern (Scope-Änderung)? Scrum sagt nein, es kann aber für Notfälle nötig sein.
 
 ## Nicht in diesem Schritt
 
 Kein Code. Kein UI-Board. Das Board kommt mit UI v1 (Inbox und Agent-Wand), nicht als Jira-Ersatz.
+
+## Änderung (2026-11-19)
+
+Der Begriff Sprint entfällt. Ein Zeitraum ist eine feste Zeitbox von 7 Tagen ab einem Startdatum (`periodStart`, `periodDays`). Grund: Nutzerwunsch, „ordentlich dokumentieren wie im Entwickler-Alltag“, nicht Scrum.

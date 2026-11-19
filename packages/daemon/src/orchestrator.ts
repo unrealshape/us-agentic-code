@@ -431,7 +431,7 @@ export const overridePathFor = (home: string): string => join(home, "routing.ove
 const ROUTING_TRACE = "routing";
 
 /** Metrik-Stichtag fuer Routing-Auswertungen: alle Ereignisse zaehlen. */
-const ALL_TIME = { sprintStart: new Date(0), sprintDays: 3650 };
+const ALL_TIME = { periodStart: new Date(0), periodDays: 3650 };
 
 /**
  * Wendet eine erteilte Freigabe `routing_change` auf den Override an. Gibt false zurueck,

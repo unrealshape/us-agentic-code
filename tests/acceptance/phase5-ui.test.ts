@@ -163,7 +163,7 @@ describe("Phase 5: Verdrahtung", () => {
     orch.approve(pending.id, true);
     const resolved = store.events({ traceId: wi.id }).find((e) => e.type === "approval.resolved");
     expect(resolved!.data).toMatchObject({ approval_id: pending.id, granted: true, by: "cli" });
-    const m = computeMetrics(store.events(), { sprintStart: new Date(0), sprintDays: 3650, now: new Date() });
+    const m = computeMetrics(store.events(), { periodStart: new Date(0), periodDays: 3650, now: new Date() });
     expect(m.approvalWait.length).toBeGreaterThan(0);
   }, 60_000);
 

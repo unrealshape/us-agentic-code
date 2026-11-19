@@ -7,7 +7,7 @@ import { loadRouting } from "../../packages/daemon/src/routing";
 import { metricsHtml } from "../../packages/ui/src/views/metrics";
 import { commandsData } from "../../packages/ui/src/views/palette";
 
-const OPTS = { sprintStart: new Date("2026-11-02T00:00:00Z"), sprintDays: 7, now: new Date("2026-11-15T12:00:00Z") };
+const OPTS = { periodStart: new Date("2026-11-02T00:00:00Z"), periodDays: 7, now: new Date("2026-11-15T12:00:00Z") };
 const ROUTING = loadRouting(REPO_ROOT);
 
 let spanSeq = 0;

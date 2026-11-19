@@ -2,7 +2,7 @@
 // Reine Funktion: eine Schleife ueber die nach id sortierten Events, Gruppierung nach traceId (= Work-Item-ID).
 import type { Model, UsacEvent } from "../../shared/src/index";
 
-export type SprintMetrics = {
+export type PeriodMetrics = {
   start: string;
   end: string;
   done: number;
@@ -26,13 +26,13 @@ export type RoleModelStats = {
 export type ApprovalWait = { kind: string; count: number; medianMs: number; maxMs: number };
 
 export type Metrics = {
-  sprints: SprintMetrics[];
+  periods: PeriodMetrics[];
   failuresPerItem: { workItemId: string; failures: number }[];
   roles: RoleModelStats[];
   approvalWait: ApprovalWait[];
 };
 
-export type MetricsOptions = { sprintStart: Date; sprintDays: number; now: Date };
+export type MetricsOptions = { periodStart: Date; periodDays: number; now: Date };
 
 const DAY_MS = 86_400_000;
 /** Ereignisse, die eine offene Freigabe abschliessen (der Code schreibt granted/denied, die Spec nennt resolved). */
@@ -63,20 +63,20 @@ function median(xs: number[]): number {
 
 export function computeMetrics(events: UsacEvent[], opts: MetricsOptions): Metrics {
   const sorted = [...events].sort((a, b) => a.id - b.id);
-  if (!sorted.length) return { sprints: [], failuresPerItem: [], roles: [], approvalWait: [] };
+  if (!sorted.length) return { periods: [], failuresPerItem: [], roles: [], approvalWait: [] };
 
-  const startMs = opts.sprintStart.getTime();
-  const boxMs = Math.max(1, opts.sprintDays) * DAY_MS;
-  const sprintIndex = (ts: string): number => {
+  const startMs = opts.periodStart.getTime();
+  const boxMs = Math.max(1, opts.periodDays) * DAY_MS;
+  const periodIndex = (ts: string): number => {
     const t = Date.parse(ts);
     return Number.isNaN(t) || t < startMs ? -1 : Math.floor((t - startMs) / boxMs);
   };
-  // Sprints vom Start bis zum Sprint, der `now` (oder das letzte Event) enthaelt, lueckenlos.
-  let lastIndex = Math.max(-1, sprintIndex(opts.now.toISOString()));
-  for (const e of sorted) lastIndex = Math.max(lastIndex, sprintIndex(e.ts));
-  const sprints: SprintMetrics[] = [];
+  // Zeitraeume vom Start bis zum Zeitraum, der `now` (oder das letzte Event) enthaelt, lueckenlos.
+  let lastIndex = Math.max(-1, periodIndex(opts.now.toISOString()));
+  for (const e of sorted) lastIndex = Math.max(lastIndex, periodIndex(e.ts));
+  const periods: PeriodMetrics[] = [];
   for (let i = 0; i <= lastIndex; i++) {
-    sprints.push({
+    periods.push({
       start: new Date(startMs + i * boxMs).toISOString(),
       end: new Date(startMs + (i + 1) * boxMs).toISOString(),
       done: 0,
@@ -124,19 +124,19 @@ export function computeMetrics(events: UsacEvent[], opts: MetricsOptions): Metri
 
   for (const e of sorted) {
     const data = (e.data ?? {}) as Record<string, unknown>;
-    const idx = sprintIndex(e.ts);
-    const sprint = idx >= 0 ? sprints[idx] : undefined;
+    const idx = periodIndex(e.ts);
+    const period = idx >= 0 ? periods[idx] : undefined;
     const t = trace(e.traceId);
 
     switch (e.type) {
       case "workitem.done":
-        if (sprint) sprint.done++;
+        if (period) period.done++;
         break;
       case "workitem.failed":
-        if (sprint) sprint.failed++;
+        if (period) period.failed++;
         break;
       case "workitem.escalated":
-        if (sprint) sprint.escalated++;
+        if (period) period.escalated++;
         if (t.lastRun) roleAcc(t.lastRun.role, t.lastRun.model).escalations++;
         break;
       case "run.started": {
@@ -157,7 +157,7 @@ export function computeMetrics(events: UsacEvent[], opts: MetricsOptions): Metri
         if (ok) acc.okRuns++;
         acc.tokens += tokens;
         acc.turns += Number(data.turns) || 0;
-        if (sprint) sprint.tokens += tokens;
+        if (period) period.tokens += tokens;
         t.lastRun = { role, model };
         if (!t.first.has(role)) t.first.set(role, { role, model, spanId: e.spanId, ok, firstPass: ok, open: true, greenSince: false });
         break;
@@ -203,7 +203,7 @@ export function computeMetrics(events: UsacEvent[], opts: MetricsOptions): Metri
     }
   }
 
-  for (const s of sprints) {
+  for (const s of periods) {
     const closed = s.done + s.escalated + s.failed;
     s.escalationRate = closed ? s.escalated / closed : 0;
   }
@@ -240,5 +240,5 @@ export function computeMetrics(events: UsacEvent[], opts: MetricsOptions): Metri
     return { kind, count: xs.length, medianMs: median(xs), maxMs: Math.max(...xs) };
   });
 
-  return { sprints, failuresPerItem, roles: roleStats, approvalWait };
+  return { periods, failuresPerItem, roles: roleStats, approvalWait };
 }

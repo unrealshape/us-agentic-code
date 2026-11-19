@@ -4,7 +4,7 @@ import { computeMetrics } from "../src/metrics";
 
 // Montag, 2. November 2026, 00:00 UTC
 const START = new Date("2026-11-02T00:00:00Z");
-const OPTS = { sprintStart: START, sprintDays: 7, now: new Date("2026-11-15T12:00:00Z") };
+const OPTS = { periodStart: START, periodDays: 7, now: new Date("2026-11-15T12:00:00Z") };
 
 let nextId = 1;
 function ev(traceId: string, ts: string, type: string, data: Record<string, unknown> = {}, spanId = traceId): UsacEvent {
@@ -20,18 +20,18 @@ function session(traceId: string, ts: string, role: string, model: string, ok: b
 }
 
 describe("computeMetrics", () => {
-  test("Velocity je Sprint", () => {
+  test("Velocity je Zeitraum", () => {
     const events = [
       ev("A", "2026-11-03T10:00:00Z", "workitem.done"),
       ev("B", "2026-11-05T10:00:00Z", "workitem.done"),
       ev("C", "2026-11-10T10:00:00Z", "workitem.done"),
     ];
     const m = computeMetrics(events, OPTS);
-    expect(m.sprints.length).toBe(2);
-    expect(m.sprints[0]!.start).toBe("2026-11-02T00:00:00.000Z");
-    expect(m.sprints[0]!.end).toBe("2026-11-09T00:00:00.000Z");
-    expect(m.sprints[0]!.done).toBe(2);
-    expect(m.sprints[1]!.done).toBe(1);
+    expect(m.periods.length).toBe(2);
+    expect(m.periods[0]!.start).toBe("2026-11-02T00:00:00.000Z");
+    expect(m.periods[0]!.end).toBe("2026-11-09T00:00:00.000Z");
+    expect(m.periods[0]!.done).toBe(2);
+    expect(m.periods[1]!.done).toBe(1);
   });
 
   test("Eskalationsrate", () => {
@@ -42,9 +42,9 @@ describe("computeMetrics", () => {
       ev("D", "2026-11-03T13:00:00Z", "workitem.escalated", { reason: "x" }),
     ];
     const m = computeMetrics(events, OPTS);
-    expect(m.sprints[0]!.escalated).toBe(1);
-    expect(m.sprints[0]!.done).toBe(3);
-    expect(m.sprints[0]!.escalationRate).toBe(0.25);
+    expect(m.periods[0]!.escalated).toBe(1);
+    expect(m.periods[0]!.done).toBe(3);
+    expect(m.periods[0]!.escalationRate).toBe(0.25);
   });
 
   test("Tokens je Rolle und Modell", () => {
@@ -60,7 +60,7 @@ describe("computeMetrics", () => {
     expect(s.runs).toBe(2);
     expect(s.okRuns).toBe(2);
     expect(s.avgTurns).toBe(5);
-    expect(m.sprints[0]!.tokens).toBe(350);
+    expect(m.periods[0]!.tokens).toBe(350);
   });
 
   test("Erstversuch-Quote und Fehlversuche je Auftrag", () => {
@@ -146,14 +146,14 @@ describe("computeMetrics", () => {
 
   test("leeres Log", () => {
     const m = computeMetrics([], OPTS);
-    expect(m).toEqual({ sprints: [], failuresPerItem: [], roles: [], approvalWait: [] });
+    expect(m).toEqual({ periods: [], failuresPerItem: [], roles: [], approvalWait: [] });
   });
 
-  test("Sprint ohne Abschluesse hat Rate 0 statt NaN", () => {
+  test("Zeitraum ohne Abschluesse hat Rate 0 statt NaN", () => {
     const events = [...session("A", "2026-11-03T10:00:00Z", "analyst", "opus", true)];
     const m = computeMetrics(events, OPTS);
-    expect(m.sprints.length).toBe(2);
-    for (const s of m.sprints) expect(s.escalationRate).toBe(0);
+    expect(m.periods.length).toBe(2);
+    for (const s of m.periods) expect(s.escalationRate).toBe(0);
   });
 
   test("unsortierte Events werden nach id verarbeitet", () => {
