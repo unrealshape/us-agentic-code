@@ -63,5 +63,26 @@ store.updateWorkItem("wi_0143", { status: "queued" });
 store.createApproval("wi_0143", "h1", { note: "Plan bereit, Freigabe fuer Umsetzung" });
 store.createApproval("wi_0142", "routing_change", { role: "implementer", from: "sonnet", to: "haiku", evidence: { runs: 25, firstPassRate: 0.88 } });
 
+// Story-Verlauf: Schritte je Rollen-Aufruf fuer eine Story.
+const steps: [string, string, string, boolean, string[], number, number][] = [
+  ["analyst", "opus", "spec", true, [], 6, 5],
+  ["test-engineer", "sonnet", "acceptance", true, ["spec/acceptance/cooldown_spec.lua"], 4, 3],
+  ["implementer", "sonnet", "implement", false, ["src/rotation.lua"], 3, 2],
+  ["implementer", "sonnet", "implement", true, ["src/rotation.lua"], 2, 1],
+  ["code-reviewer", "opus", "review", true, [], 1, 0],
+];
+for (const [role, model, _phase, ok, files, startMin, endMin] of steps) {
+  store.recordStep({
+    workItemId: "wi_0142",
+    role,
+    model,
+    ok,
+    ...(ok ? {} : { reason: "Abnahmetest rot: Cooldown-Filter fehlt" }),
+    files,
+    startedAt: iso(startMin),
+    endedAt: iso(endMin),
+  });
+}
+
 store.close();
 console.log(`Demo-Datenbank befuellt: ${path}`);

@@ -15,6 +15,7 @@ import { registerReview } from "./views/review";
 import { registerKnowledge } from "./views/knowledge";
 import { registerMetrics } from "./views/metrics";
 import { commandsData, registerPalette } from "./views/palette";
+import { dashboardData, dashboardHtml } from "./views/dashboard";
 
 /** Wurzel des Plugins (routing.yaml, workflows/) relativ zu diesem Modul. */
 const DEFAULT_PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
@@ -76,6 +77,8 @@ export function createApp(store: Store, deps?: AppDeps): Hono {
   registerMetrics(app, { store, routing, periodStart: defaultPeriodStart(store, now), periodDays: 7 });
 
   app.get("/api/commands", (c) => c.json(commandsData(store)));
+  app.get("/dashboard", (c) => c.html(dashboardHtml(store, c.req.query("story") || undefined)));
+  app.get("/api/dashboard", (c) => c.json(dashboardData(store, c.req.query("story") || undefined)));
   registerPalette(app, store);
   for (const [path, type] of STATIC) {
     app.get(path, () => new Response(Bun.file(join(PUBLIC_DIR, path.slice(1))), { headers: { "content-type": type, "cache-control": "no-cache" } }));

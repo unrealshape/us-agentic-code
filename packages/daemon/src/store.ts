@@ -229,8 +229,13 @@ export class Store {
     return { ...s, id: row.id };
   }
 
-  listSteps(workItemId: string): Step[] {
-    const rows = this.db.query("SELECT * FROM steps WHERE workitem_id = ? ORDER BY id").all(workItemId) as Record<string, unknown>[];
+  /** Schritte eines Auftrags, ohne Angabe alle (neueste zuletzt). */
+  listSteps(workItemId?: string): Step[] {
+    const rows = (
+      workItemId === undefined
+        ? this.db.query("SELECT * FROM steps ORDER BY id").all()
+        : this.db.query("SELECT * FROM steps WHERE workitem_id = ? ORDER BY id").all(workItemId)
+    ) as Record<string, unknown>[];
     return rows.map((r) => ({
       id: r.id as number,
       workItemId: r.workitem_id as string,
@@ -242,6 +247,21 @@ export class Store {
       startedAt: r.started_at as string,
       endedAt: r.ended_at as string,
     }));
+  }
+
+  /** Die letzten `limit` Events, aelteste zuerst. */
+  recentEvents(limit: number): UsacEvent[] {
+    const max = (this.db.query("SELECT COALESCE(MAX(id), 0) AS m FROM events").get() as { m: number }).m;
+    return this.events({ sinceId: Math.max(0, max - limit) });
+  }
+
+  /** Zeilenzahl der Tabellen, die das Dashboard zeigt. */
+  tableCounts(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const t of ["events", "workitems", "steps", "gate_results", "approvals"]) {
+      out[t] = (this.db.query(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+    }
+    return out;
   }
 
   // ---- Gates ---------------------------------------------------------------------
