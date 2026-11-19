@@ -66,7 +66,7 @@ describe("Schreibaktion über echten HTTP-Server", () => {
     try {
       const base = `http://127.0.0.1:${srv.port}`;
       // Token steht nur auf der Inbox-Seite (Meta-Tag), nie in der URL.
-      const page = await (await fetch(`${base}/`)).text();
+      const page = await (await fetch(`${base}/inbox`)).text();
       const token = /<meta name="usac-token" content="([0-9a-f]{64})">/.exec(page)?.[1];
       expect(token).toBeString();
       const id = store.pendingApprovals()[0]!.id;

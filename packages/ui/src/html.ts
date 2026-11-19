@@ -68,7 +68,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 `;
 
 const NAV: [string, string][] = [
-  ["/", "Inbox"],
+  ["/dashboard", "Dashboard"],
+  ["/inbox", "Inbox"],
   ["/wall", "Agent-Wand"],
   ["/metrics", "Metriken"],
   ["/knowledge", "Wissen"],

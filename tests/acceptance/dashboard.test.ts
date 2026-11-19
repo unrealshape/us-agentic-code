@@ -159,6 +159,28 @@ describe("Dashboard (Abnahme)", () => {
     expect(html).toContain("opus");
   });
 
+  test("/ leitet automatisch zum Dashboard weiter, die Inbox liegt unter /inbox", async () => {
+    const store = seeded();
+    const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });
+    const root = await app.request("/", { redirect: "manual" });
+    expect(root.status).toBe(302);
+    expect(root.headers.get("location")).toBe("/dashboard");
+    const inbox = await app.request("/inbox");
+    expect(inbox.status).toBe(200);
+  });
+
+  test("das Dashboard enthaelt alle Bereiche, Freigaben mit Anzahl", async () => {
+    const store = seeded();
+    store.createApproval("wi_1", "h1", { note: "Plan" });
+    const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });
+    const html = await (await app.request("/dashboard")).text();
+    for (const href of ["/inbox", "/wall", "/metrics", "/knowledge", "/dashboard?view=tokens", "/dashboard?view=sessions", "/dashboard?view=diagnose"]) {
+      expect(html).toContain(`href="${href}"`);
+    }
+    expect(html).toContain("Freigaben");
+    expect(html).toMatch(/Freigaben<\/span><span class="count">1</);
+  });
+
   test("/dashboard zeigt Seitenleiste, Story, Schritt-Dateien und den Live-Status", async () => {
     const store = seeded();
     const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });

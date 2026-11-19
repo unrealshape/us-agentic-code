@@ -20,6 +20,7 @@ export function dashboardData(store: Store, opts: { storyId?: string; view?: str
     stories,
     story: opts.storyId ?? null,
     tables: store.tableCounts(),
+    approvals: store.pendingApprovals().length,
     events: store.recentEvents(30).map((e) => ({ id: e.id, ts: e.ts, type: e.type, actor: e.actor, traceId: e.traceId })),
     now: new Date().toISOString(),
   };
@@ -98,7 +99,6 @@ export function dashboardData(store: Store, opts: { storyId?: string; view?: str
 }
 
 const NAV: [string, string][] = [
-  ["/", "Inbox"],
   ["/wall", "Agent-Wand"],
   ["/metrics", "Metriken"],
   ["/knowledge", "Wissen"],
@@ -228,7 +228,10 @@ function layout(view: DashboardView, d: ReturnType<typeof dashboardData>, storyI
     .join("");
   const viewLink = (v: DashboardView, label: string, sub: string) =>
     `<a class="item${view === v ? " sel" : ""}" href="/dashboard?view=${v}"><span>${esc(label)}<span class="sub">${esc(sub)}</span></span></a>`;
-  const nav = NAV.map(([href, label]) => `<a class="item" href="${href}"><span>${esc(label)}</span></a>`).join("");
+  const pending = d.approvals;
+  const nav =
+    `<a class="item" href="/inbox"><span>Freigaben</span><span class="count">${pending}</span></a>` +
+    NAV.map(([href, label]) => `<a class="item" href="${href}"><span>${esc(label)}</span></a>`).join("");
   const initial = JSON.stringify(d).replace(/</g, "\\u003c");
   const titleHtml = esc(title);
   return (
@@ -241,7 +244,7 @@ function layout(view: DashboardView, d: ReturnType<typeof dashboardData>, storyI
     `<h2>Datenbank</h2>${tableLinks}` +
     `<h2>Auswertung</h2>${viewLink("tokens", "Token-Metriken", "Verbrauch und Modelle")}${viewLink("sessions", "Sessions", "alle Rollen-Aufrufe")}` +
     `<h2>Entwickler</h2>${viewLink("diagnose", "Diagnose", "Datenbank und Werkzeuge prüfen")}` +
-    `<h2>Navigation</h2>${nav}</aside>` +
+    `<h2>Arbeitsbereich</h2>${nav}</aside>` +
     `<main>${body}</main>` +
     `<script type="application/json" id="initial">${initial}</script>` +
     `<script>${SCRIPT}</script>` +
