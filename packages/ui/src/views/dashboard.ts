@@ -7,7 +7,10 @@ export const DASHBOARD_VIEWS: DashboardView[] = ["story", "tokens", "sessions", 
 type Tokens = { input: number; output: number };
 
 /** Daten fuer das Dashboard. Die Felder je Seite kommen nur, wenn die Seite sie braucht. */
-export function dashboardData(store: Store, opts: { storyId?: string; view?: string } = {}) {
+/** Zeitraeume fuer die Token-Ansicht in Stunden; "all" = ohne Begrenzung. */
+const RANGES: Record<string, number> = { "1h": 1, "8h": 8, "24h": 24, "7d": 168, "30d": 720 };
+
+export function dashboardData(store: Store, opts: { storyId?: string; view?: string; range?: string } = {}) {
   const view: DashboardView = (DASHBOARD_VIEWS as string[]).includes(opts.view ?? "") ? (opts.view as DashboardView) : "story";
   const workitems = store.listWorkItems();
   const stories = workitems.map((w) => ({ id: w.id, title: w.title, type: w.type, status: w.status, size: w.size, createdAt: w.createdAt }));
@@ -22,8 +25,18 @@ export function dashboardData(store: Store, opts: { storyId?: string; view?: str
   };
 
   if (view === "tokens") {
-    const steps = store.listSteps();
-    const totals = steps.reduce((t, s) => ({ input: t.input + s.tokens.input, output: t.output + s.tokens.output }), { input: 0, output: 0 });
+    const range = RANGES[opts.range ?? ""] ? (opts.range as string) : "all";
+    const since = range === "all" ? null : Date.now() - RANGES[range]! * 3_600_000;
+    const steps = store.listSteps().filter((s) => since === null || Date.parse(s.endedAt) >= since);
+    const paths = new Map(workitems.map((w) => [w.id, w.projectPath]));
+    const perProject = new Map<string, number>();
+    for (const s of steps) {
+      const p = paths.get(s.workItemId) ?? "unbekannt";
+      perProject.set(p, (perProject.get(p) ?? 0) + s.tokens.input + s.tokens.output);
+    }
+    const byProject = [...perProject.entries()]
+      .map(([path, total]) => ({ project: path.split(/[\\/]/).filter(Boolean).pop() ?? path, path, total }))
+      .sort((a, b) => b.total - a.total);
     const perModel = new Map<string, Tokens>();
     for (const s of steps) {
       const m = perModel.get(s.model) ?? { input: 0, output: 0 };
@@ -39,7 +52,8 @@ export function dashboardData(store: Store, opts: { storyId?: string; view?: str
         running += s.tokens.input + s.tokens.output;
         return { at: s.endedAt, total: running };
       });
-    return { ...base, totals: { ...totals, total: totals.input + totals.output }, byModel, series };
+    const totals = steps.reduce((t, s) => ({ input: t.input + s.tokens.input, output: t.output + s.tokens.output }), { input: 0, output: 0 });
+    return { ...base, range, totals: { ...totals, total: totals.input + totals.output }, byModel, series, byProject };
   }
 
   if (view === "sessions") {
@@ -308,7 +322,7 @@ const SCRIPT = `
 })();
 `;
 
-export function dashboardHtml(store: Store, opts: { storyId?: string; view?: string } = {}): string {
+export function dashboardHtml(store: Store, opts: { storyId?: string; view?: string; range?: string } = {}): string {
   const d = dashboardData(store, opts);
   const view = d.view;
   const selected = opts.storyId ? d.stories.find((s) => s.id === opts.storyId) : undefined;
@@ -319,6 +333,17 @@ export function dashboardHtml(store: Store, opts: { storyId?: string; view?: str
     const byModel = (d as { byModel: { model: string; input: number; output: number; total: number }[] }).byModel;
     const series = (d as { series: { at: string; total: number }[] }).series;
     const sum = byModel.reduce((a, m) => a + m.total, 0);
+    const range = (d as { range: string }).range;
+    const byProject = (d as { byProject: { project: string; path: string; total: number }[] }).byProject;
+    const rangeLinks = ["1h", "8h", "24h", "7d", "30d", "all"]
+      .map(
+        (r) =>
+          `<a class="item${range === r ? " sel" : ""}" style="display:inline-block;width:auto;padding:6px 12px;margin-right:4px;border:1px solid var(--line);border-radius:8px" href="/dashboard?view=tokens&range=${r}">${r === "all" ? "Gesamt" : r}</a>`,
+      )
+      .join("");
+    const projectRows = byProject
+      .map((p) => `<tr><td>${esc(p.project)}</td><td>${esc(p.path)}</td><td>${esc(fmt(p.total))}</td></tr>`)
+      .join("");
     const legend = byModel
       .map(
         (m, i) =>
@@ -327,13 +352,15 @@ export function dashboardHtml(store: Store, opts: { storyId?: string; view?: str
       .join("");
     const body =
       `<div class="top"><div><div class="kicker">Auswertung</div><h1>Token-Metriken</h1></div>${pill}</div>` +
+      `<div style="margin-bottom:14px">${rangeLinks}</div>` +
       `<div class="grid">` +
       `<div class="tile"><div class="lbl"><span class="dot-c" style="background:var(--cyan)"></span>Gesamt</div><div class="val">${fmt(t.total)}</div><div class="sub2">alle Schritte</div></div>` +
       `<div class="tile"><div class="lbl"><span class="dot-c" style="background:var(--purple)"></span>Input</div><div class="val">${fmt(t.input)}</div></div>` +
       `<div class="tile"><div class="lbl"><span class="dot-c" style="background:var(--amber)"></span>Output</div><div class="val">${fmt(t.output)}</div></div>` +
       `</div>` +
       `<div class="row2"><section class="card"><h2>Tokens im Verlauf</h2>${tokenChart(series)}</section>` +
-      `<section class="card"><h2>Tokens nach Modell</h2><div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">${donut(byModel)}<div class="legend" style="flex:1;min-width:180px">${legend || '<div class="empty">Keine Daten</div>'}</div></div></section></div>`;
+      `<section class="card"><h2>Tokens nach Modell</h2><div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">${donut(byModel)}  <div class="legend" style="flex:1;min-width:180px">${legend || '<div class="empty">Keine Daten</div>'}</div></div></section></div>` +
+      `<section class="card"><h2>Tokens je Projekt</h2>${projectRows ? `<table><thead><tr><th>Projekt</th><th>Pfad</th><th>Tokens</th></tr></thead><tbody>${projectRows}</tbody></table>` : '<div class="empty">Keine Daten im Zeitraum.</div>'}</section>`;
     return layout(view, d, opts.storyId, body, "Token-Metriken");
   }
 

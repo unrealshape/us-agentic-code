@@ -95,6 +95,38 @@ describe("Dashboard (Abnahme)", () => {
     expect(body.series[1]!.total).toBeGreaterThan(body.series[0]!.total);
   });
 
+  test("/api/dashboard?view=tokens&range=24h zaehlt nur Schritte der letzten 24 Stunden", async () => {
+    const store = seeded();
+    // Ein alter Schritt (2020) liegt sicher ausserhalb jedes Zeitfensters, unabhaengig vom heutigen Datum.
+    store.recordStep({
+      workItemId: "wi_1",
+      role: "analyst",
+      model: "opus",
+      ok: true,
+      files: [],
+      startedAt: "2020-01-01T10:00:00.000Z",
+      endedAt: "2020-01-01T10:01:00.000Z",
+      tokens: { input: 100000, output: 100000 },
+    });
+    const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });
+    const all = (await (await app.request("/api/dashboard?view=tokens")).json()) as { totals: { total: number } };
+    const day = (await (await app.request("/api/dashboard?view=tokens&range=24h")).json()) as {
+      totals: { total: number };
+      range: string;
+    };
+    expect(day.range).toBe("24h");
+    expect(all.totals.total - day.totals.total).toBe(200000);
+  });
+
+  test("/api/dashboard?view=tokens liefert Tokens je Projekt", async () => {
+    const store = seeded();
+    const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });
+    const body = (await (await app.request("/api/dashboard?view=tokens")).json()) as {
+      byProject: { project: string; path: string; total: number }[];
+    };
+    expect(body.byProject).toEqual([{ project: "p", path: "C:/p", total: 7400 }]);
+  });
+
   test("/api/dashboard?view=sessions liefert alle Schritte mit Story-Titel", async () => {
     const store = seeded();
     const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });

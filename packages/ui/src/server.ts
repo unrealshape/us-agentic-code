@@ -77,8 +77,12 @@ export function createApp(store: Store, deps?: AppDeps): Hono {
   registerMetrics(app, { store, routing, periodStart: defaultPeriodStart(store, now), periodDays: 7 });
 
   app.get("/api/commands", (c) => c.json(commandsData(store)));
-  app.get("/dashboard", (c) => c.html(dashboardHtml(store, { storyId: c.req.query("story") || undefined, view: c.req.query("view") })));
-  app.get("/api/dashboard", (c) => c.json(dashboardData(store, { storyId: c.req.query("story") || undefined, view: c.req.query("view") })));
+  app.get("/dashboard", (c) =>
+    c.html(dashboardHtml(store, { storyId: c.req.query("story") || undefined, view: c.req.query("view"), range: c.req.query("range") })),
+  );
+  app.get("/api/dashboard", (c) =>
+    c.json(dashboardData(store, { storyId: c.req.query("story") || undefined, view: c.req.query("view"), range: c.req.query("range") })),
+  );
   registerPalette(app, store);
   for (const [path, type] of STATIC) {
     app.get(path, () => new Response(Bun.file(join(PUBLIC_DIR, path.slice(1))), { headers: { "content-type": type, "cache-control": "no-cache" } }));
