@@ -54,14 +54,14 @@ const pct = (x: number): string => `${Math.round(x * 100)} %`;
 
 function sprintsSection(m: Metrics): string {
   const velocity = barFigure(
-    "Velocity (erledigte Auftraege je Sprint)",
-    m.sprints.map((s, i) => ({ label: `Sprint ${i + 1} (ab ${s.start.slice(0, 10)})`, value: s.done, shown: String(s.done) })),
+    "Erledigte Aufträge je Zeitraum (7 Tage)",
+    m.sprints.map((s) => ({ label: `ab ${s.start.slice(0, 10)}`, value: s.done, shown: String(s.done) })),
   );
   const escalation = barFigure(
-    "Eskalationsrate je Sprint",
-    m.sprints.map((s, i) => ({ label: `Sprint ${i + 1}`, value: s.escalationRate * 100, shown: pct(s.escalationRate) })),
+    "Eskalationsrate je Zeitraum (7 Tage)",
+    m.sprints.map((s) => ({ label: `ab ${s.start.slice(0, 10)}`, value: s.escalationRate * 100, shown: pct(s.escalationRate) })),
   );
-  return `<h2>Sprints</h2>${velocity}${escalation}`;
+  return `<h2>Verlauf</h2>${velocity}${escalation}`;
 }
 
 function waitSection(m: Metrics): string {
