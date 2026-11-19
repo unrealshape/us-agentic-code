@@ -7,7 +7,8 @@ import { stringify } from "yaml";
 import type { Size, WorkItemType } from "@usac/shared";
 import { sh } from "./exec";
 import { excludeFromGit, hasGraphify, updateGraph } from "./graph";
-import { createOrchestrator } from "./orchestrator";
+import { createOrchestrator, suggestRoutingApprovals } from "./orchestrator";
+import { loadNightConfig } from "./night";
 import "./registry-setup";
 import { ClaudeRunner } from "./runner/claude";
 import { ensureLeaseSchema } from "./leases";
@@ -31,15 +32,17 @@ const HELP = `US-AGENTIC-CODE (usac)
   usac init [pfad]                         Projekt einrichten (.usac/project.yaml, Graphify)
   usac new-project <ordner> --stack <profil>  Ordner, git init, .usac/project.yaml und ersten Commit anlegen
                                            (kein GitHub-Remote; das richtest du selbst ein)
-  usac run <typ> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,spec] [--queue]
+  usac run <typ> -t <titel> [-d <beschreibung>] [--size small] [--project .] [--auto h1,spec] [--queue] [--night]
                                            <typ>: bugfix, feature, change, refactor, new-project,
                                            dependency-update, security-fix, spike
                                            --auto spec wirkt nur, wenn die Spec keine offenen Fragen hat
                                            --queue reiht nur ein; usac daemon fuehrt aus
+                                           --night reiht ein und startet nur im Nachtfenster (config.yaml, Schluessel night)
   usac resume <workitem-id>                Auftrag fortsetzen (z. B. nach Freigabe)
   usac status [workitem-id]                Auftraege und Status
   usac events <workitem-id> [--since n]    Event-Log eines Auftrags
   usac approve <freigabe-id> [--deny] [--note text]
+  usac routing suggest                     Herabstufungs-Vorschlaege als Freigaben anlegen (Duplikate entfallen)
   usac daemon [--parallel 3]               Scheduler-Schleife: wartende Auftraege starten (Takt 1 s)
   usac leases                              Datei-Leases (Pfad, Halter, Alter)
   usac doctor                              Werkzeuge und Voraussetzungen pruefen
@@ -108,6 +111,7 @@ async function main() {
           project: { type: "string", default: "." },
           auto: { type: "string", default: "" },
           queue: { type: "boolean", default: false },
+          night: { type: "boolean", default: false },
         },
       });
       const type = (positionals[0] ?? "bugfix") as WorkItemType;
@@ -127,9 +131,10 @@ async function main() {
         size: values.size as Size,
       });
       console.log(`Auftrag ${wi.id} angelegt.`);
-      if (values.queue) {
-        store.append({ traceId: wi.id, spanId: wi.id, parentSpanId: null, project: basename(wi.projectPath), type: "workitem.queued", actor: "orchestrator", data: { reason: "cli" } });
-        console.log(`Auftrag ${wi.id}: queued (startet mit usac daemon)`);
+      if (values.night) store.updateWorkItem(wi.id, { state: { ...wi.state, night: true } });
+      if (values.queue || values.night) {
+        store.append({ traceId: wi.id, spanId: wi.id, parentSpanId: null, project: basename(wi.projectPath), type: "workitem.queued", actor: "orchestrator", data: { reason: values.night ? "night" : "cli" } });
+        console.log(`Auftrag ${wi.id}: queued (startet mit usac daemon${values.night ? ", im Nachtfenster" : ""})`);
         break;
       }
       printResult(await orch.run(wi.id), wi.id);
@@ -216,7 +221,7 @@ async function main() {
       const max = Number(values.parallel);
       if (!Number.isInteger(max) || max < 1) throw new Error(`--parallel braucht eine ganze Zahl >= 1 (war: ${values.parallel})`);
       const { store, orch } = orchestrator();
-      const sched = createScheduler({ store, run: (id) => orch.run(id, { slotHeld: true }), maxParallel: max });
+      const sched = createScheduler({ store, run: (id) => orch.run(id, { slotHeld: true }), maxParallel: max, night: loadNightConfig(HOME) });
       let stopping = false;
       let busy = false;
       const loop = setInterval(async () => {
@@ -286,14 +291,21 @@ async function main() {
       console.log(missing ? `\n${missing} Pflicht-Werkzeug(e) fehlen.` : "\nAlles bereit.");
       process.exit(missing ? 1 : 0);
     }
+    case "routing": {
+      if (rest[0] !== "suggest") throw new Error("Unbekannter Befehl. Erlaubt: usac routing suggest");
+      const { store } = orchestrator();
+      const created = suggestRoutingApprovals(store, { pluginRoot: PLUGIN_ROOT, home: HOME, now: new Date() });
+      if (!created.length) console.log("Keine neuen Herabstufungs-Vorschlaege.");
+      for (const c of created) {
+        console.log(`Freigabe ${c.approvalId} (routing_change): ${c.key} ${c.from} -> ${c.to}. Erteilen: usac approve ${c.approvalId}`);
+      }
+      break;
+    }
     case "ui": {
-      const { values } = parseArgs({
-        args: rest,
-        options: { port: { type: "string", default: "7777" }, host: { type: "string", default: "127.0.0.1" } },
-      });
+      const { values } = parseArgs({ args: rest, options: { port: { type: "string", default: "7777" } } });
       const { startServer } = await import("../../ui/src/server");
-      const server = startServer(openStore(join(HOME, "usac.db")), { port: Number(values.port), host: values.host });
-      console.log(`UI laeuft: http://${values.host}:${server.port}/`);
+      const server = startServer(openStore(join(HOME, "usac.db")), { port: Number(values.port), pluginRoot: PLUGIN_ROOT, home: HOME });
+      console.log(`UI laeuft: http://127.0.0.1:${server.port}/`);
       break;
     }
     default:

@@ -117,6 +117,9 @@ describe("Nachtbetrieb (Abnahme)", () => {
   test("Morgenbericht", async () => {
     const store = openStore(":memory:");
     addItems(store, ["wi_done", "wi_esc", "wi_wait"]);
+    // Der Bericht entsteht nur, wenn ein Nachtauftrag in dieser Nacht gestartet ist.
+    store.updateWorkItem("wi_done", { state: { night: true } });
+    appendEvent(store, at(2026, 11, 19, 23, 0), "wi_done", "slot.acquired", { max: 3 });
     appendEvent(store, at(2026, 11, 19, 23, 0), "wi_done", "run.finished", { tokens: { input: 1_000, output: 0 } });
     appendEvent(store, at(2026, 11, 19, 23, 10), "wi_done", "workitem.done");
     appendEvent(store, at(2026, 11, 20, 1, 0), "wi_esc", "workitem.escalated");
@@ -136,6 +139,30 @@ describe("Nachtbetrieb (Abnahme)", () => {
     // Nur einmal je Nacht, auch bei weiteren Ticks.
     await sched.tick();
     expect(store.pendingApprovals().filter((a) => a.kind === "night_report").length).toBe(1);
+  });
+
+  test("Kein Morgenbericht ohne Nachtlauf", async () => {
+    const store = openStore(":memory:");
+    addItems(store, ["wi_day"]);
+    appendEvent(store, at(2026, 11, 19, 15, 0), "wi_day", "slot.acquired", { max: 3 });
+    const clock = at(2026, 11, 20, 6, 0).getTime();
+    const sched = createScheduler({ store, run: fakeRun(store).run, now: () => clock, night: NightConfig.parse({}) });
+    await sched.tick();
+    expect(store.pendingApprovals().filter((a) => a.kind === "night_report").length).toBe(0);
+  });
+
+  test("max_parallel begrenzt Nachtlaeufe zusaetzlich zum Scheduler-Limit", async () => {
+    const store = openStore(":memory:");
+    addItems(store, ["wi_n1", "wi_n2", "wi_n3"]);
+    for (const id of ["wi_n1", "wi_n2", "wi_n3"]) store.updateWorkItem(id, { state: { night: true } });
+    const fake = fakeRun(store);
+    const clock = at(2026, 11, 19, 23, 0).getTime();
+    const sched = createScheduler({ store, run: fake.run, now: () => clock, night: NightConfig.parse({ max_parallel: 1 }) });
+    for (const id of ["wi_n1", "wi_n2", "wi_n3"]) sched.enqueue(id);
+    expect((await sched.tick()).length).toBe(1);
+    expect((await sched.tick()).length).toBe(0);
+    for (const resolve of fake.pending.values()) resolve({ status: "done", branch: null });
+    await sched.idle();
   });
 
   test("Konfiguration aus config.yaml, Schluessel night", () => {

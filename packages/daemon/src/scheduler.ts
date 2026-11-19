@@ -143,6 +143,13 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
     const until = windowEnd(since, night.window);
     const existing = store.db.query("SELECT context FROM approvals WHERE kind = 'night_report'").all() as { context: string }[];
     if (existing.some((r) => (JSON.parse(r.context) as { since?: string }).since === since.toISOString())) return;
+    // Ohne Nachtauftrag, der in dieser Nacht tatsaechlich gestartet ist, gibt es keinen Bericht.
+    const nightIds = new Set(store.listWorkItems().filter((w) => w.state.night === true).map((w) => w.id));
+    const ran = store.events({ type: "slot.acquired" }).some((e) => {
+      const at = new Date(e.ts).getTime();
+      return nightIds.has(e.traceId) && at >= since.getTime() && at < until.getTime();
+    });
+    if (!ran) return;
     const report = nightReport(store.events(), since, until);
     store.createApproval(nightId(since), "night_report", { since: since.toISOString(), until: until.toISOString(), ...report });
   }
@@ -203,6 +210,9 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
             budgetReachedOnce(since, t, used);
             continue;
           }
+          // max_parallel begrenzt Nachtlaeufe zusaetzlich zum Scheduler-Limit; der kleinere Wert gewinnt.
+          const nightRunning = [...running.keys()].filter((r) => store.getWorkItem(r)?.state.night === true).length;
+          if (nightRunning >= night.max_parallel) continue;
         }
         if (!tryAcquireSlot(store, id, max, t)) continue;
         started.push(id);

@@ -26,11 +26,13 @@ import { HEARTBEAT_MS, PROJECT_WIDE, acquireLeases, ensureLeaseSchema, heartbeat
 import { GRAPH_NOTE, implementerPrompt, rolePrompt, roleSchema, testEngineerPrompt } from "./prompts";
 import { budgetUsedFraction, DEFAULT_MAX_TOKENS } from "./quota";
 import { createReviewHandler } from "./review";
-import { loadRouting, resolveModel, type RoutingConfig } from "./routing";
+import { loadRouting, loadRoutingOverride, resolveModel, type RoutingConfig } from "./routing";
+import { applyDowngrade, evaluateTrials, suggestDowngrades, type DowngradeSuggestion } from "./downgrade";
+import { computeMetrics } from "./metrics";
 import { validateHosts } from "./runner/claude";
 import type { Runner } from "./runner/types";
 import { MAX_PARALLEL, ensureSlotSchema, releaseSlot, slotHeartbeat, tryAcquireSlot } from "./scheduler";
-import type { GateResult, Store, WorkItem } from "./store";
+import type { Approval, GateResult, Store, WorkItem } from "./store";
 import { createTeamHandlers } from "./team-phases";
 import { createTestDb, dropTestDb } from "./testdb";
 import { activePhases, loadWorkflow, type PhaseSpec, type Workflow } from "./workflow";
@@ -422,10 +424,68 @@ function gateEvents(ctx: PhaseContext, wi: WorkItem, results: GateResult[]) {
 
 // ---- Orchestrator -----------------------------------------------------------------------
 
+/** Ort der Routing-Overrides je Installation (ADR 0010: routing.yaml im Plugin bleibt unveraendert). */
+export const overridePathFor = (home: string): string => join(home, "routing.override.yaml");
+
+/** Kennung der Ereignisse, die nicht zu einem Auftrag gehoeren (Herabstufung, Probebetrieb). */
+const ROUTING_TRACE = "routing";
+
+/** Metrik-Stichtag fuer Routing-Auswertungen: alle Ereignisse zaehlen. */
+const ALL_TIME = { sprintStart: new Date(0), sprintDays: 3650 };
+
+/**
+ * Wendet eine erteilte Freigabe `routing_change` auf den Override an. Gibt false zurueck,
+ * wenn die Freigabe nicht von dieser Art oder nicht erteilt ist.
+ */
+export function applyRoutingApproval(a: Approval, overridePath: string, now: Date): boolean {
+  if (a.kind !== "routing_change" || a.status !== "granted") return false;
+  const c = a.context as DowngradeSuggestion;
+  applyDowngrade(overridePath, { role: c.role, variant: c.variant, from: c.from, to: c.to, evidence: c.evidence }, now);
+  return true;
+}
+
+/**
+ * Legt je Herabstufungs-Vorschlag eine Freigabe `routing_change` an. Vorschlaege, zu denen es schon
+ * eine Freigabe (offen, erteilt oder abgelehnt) mit gleichem Schluessel und Ziel gibt, entfallen.
+ * Die Freigabe ist die einzige Stelle, die Routing aendert; hier passiert nichts am Override.
+ */
+export function suggestRoutingApprovals(
+  store: Store,
+  opts: { pluginRoot: string; home: string; now: Date },
+): { key: string; from: string; to: string; approvalId: number }[] {
+  const routing = loadRouting(opts.pluginRoot, overridePathFor(opts.home));
+  const stats = computeMetrics(store.events(), { ...ALL_TIME, now: opts.now }).roles;
+  const known = new Set(
+    (store.db.query("SELECT context FROM approvals WHERE kind = 'routing_change'").all() as { context: string }[]).map((r) => {
+      const c = JSON.parse(r.context) as DowngradeSuggestion;
+      return `${c.role}.${c.variant ?? ""}->${c.to}`;
+    }),
+  );
+  const out: { key: string; from: string; to: string; approvalId: number }[] = [];
+  for (const s of suggestDowngrades(stats, routing)) {
+    const dedup = `${s.role}.${s.variant ?? ""}->${s.to}`;
+    if (known.has(dedup)) continue;
+    known.add(dedup);
+    const key = s.variant ? `${s.role}.${s.variant}` : s.role;
+    const a = store.createApproval(ROUTING_TRACE, "routing_change", s);
+    store.append({
+      traceId: ROUTING_TRACE,
+      spanId: ROUTING_TRACE,
+      parentSpanId: null,
+      project: "usac",
+      type: "approval.requested",
+      actor: "orchestrator",
+      data: { approval_id: a.id, kind: "routing_change", blocking: false, key },
+    });
+    out.push({ key, from: s.from, to: s.to, approvalId: a.id });
+  }
+  return out;
+}
+
 export function createOrchestrator(opts: OrchestratorOptions) {
   const { store, runner, pluginRoot, home } = opts;
   const limits: Limits = { ...DEFAULT_LIMITS, ...opts.limits };
-  const routing: RoutingConfig = loadRouting(pluginRoot);
+  const routing: RoutingConfig = loadRouting(pluginRoot, overridePathFor(home));
   const auto = new Set(opts.approvals?.auto ?? []);
   ensureLeaseSchema(store);
   ensureSlotSchema(store);
@@ -594,6 +654,24 @@ export function createOrchestrator(opts: OrchestratorOptions) {
     }
   }
 
+  /**
+   * Wertet laufende Herabstufungs-Proben aus (nach jedem Lauf). Gewertet werden nur Ereignisse seit dem
+   * fruehesten Probebeginn; Probe-Modelle kommen vor Probebeginn nicht vor, daher zaehlt nichts Altes mit.
+   */
+  function checkTrials(): void {
+    const path = overridePathFor(home);
+    const ov = loadRoutingOverride(path);
+    const starts = Object.values(ov.trials).map((t) => Date.parse(t.startedAt));
+    if (!starts.length) return;
+    const since = Math.min(...starts);
+    const events = store.events().filter((e) => Date.parse(e.ts) >= since);
+    const { reverted, confirmed } = evaluateTrials(path, computeMetrics(events, { ...ALL_TIME, now: new Date() }).roles);
+    const ev = (type: string, key: string) =>
+      store.append({ traceId: ROUTING_TRACE, spanId: ROUTING_TRACE, parentSpanId: null, project: "usac", type, actor: "orchestrator", data: { key } });
+    for (const key of reverted) ev("routing.trial_reverted", key);
+    for (const key of confirmed) ev("routing.trial_confirmed", key);
+  }
+
   // ---- Oeffentliche API ----------------------------------------------------------------
 
   return {
@@ -680,6 +758,9 @@ export function createOrchestrator(opts: OrchestratorOptions) {
             wi = advance(wi, idx);
             continue;
           }
+          // Ein Phasenwechsel ist ein Ereignis; nach einer Freigabe betritt der Lauf dieselbe Phase erneut, ohne neues Ereignis.
+          const lastEntered = store.events({ traceId: wi.id, type: "phase.entered" }).at(-1);
+          if ((lastEntered?.data as { name?: unknown } | undefined)?.name !== current) emit(wi, "phase.entered", { name: current });
           wi = await getPhase(current)!(wi, context(workflow.phases[idx]!, workflow, profile, gp));
           if (wi.status === "awaiting_approval") return { status: "awaiting_approval", branch: wi.branch };
           if (wi.status === "queued") return { status: "queued", branch: wi.branch }; // z. B. lease.wait
@@ -717,16 +798,39 @@ export function createOrchestrator(opts: OrchestratorOptions) {
           releaseLeases(store, id);
           await dropDb(cur);
         }
+        checkTrials();
       }
     },
 
     approve(approvalId: number, granted: boolean, note?: string) {
       const a = store.getApproval(approvalId);
       if (!a) throw new Error(`Freigabe ${approvalId} nicht gefunden`);
+      const wasPending = a.status === "pending";
       store.resolveApproval(approvalId, granted, note);
+      const wi = store.getWorkItem(a.workItemId);
+      store.append({
+        traceId: a.workItemId,
+        spanId: a.workItemId,
+        parentSpanId: null,
+        project: wi ? basename(wi.projectPath) : "usac",
+        type: "approval.resolved",
+        actor: "user",
+        data: { approval_id: approvalId, granted, by: "cli" },
+      });
+      // Erteilte Herabstufung: nur beim Wechsel von offen auf erteilt, damit sie nie doppelt greift.
+      if (wasPending && granted && applyRoutingApproval(store.getApproval(approvalId)!, overridePathFor(home), new Date())) {
+        store.append({
+          traceId: a.workItemId,
+          spanId: a.workItemId,
+          parentSpanId: null,
+          project: "usac",
+          type: "routing.applied",
+          actor: "orchestrator",
+          data: { approval_id: approvalId, ...(a.context as DowngradeSuggestion) },
+        });
+      }
       // Wartender Auftrag geht zurueck in die Queue; der Daemon setzt ihn im naechsten Takt fort.
       // Freigaben der Art protector blockieren nie und reihen daher nichts ein.
-      const wi = store.getWorkItem(a.workItemId);
       if (wi && wi.status === "awaiting_approval" && a.kind !== "protector") {
         store.updateWorkItem(wi.id, { status: "queued" });
         emit(store.getWorkItem(wi.id)!, "workitem.queued", { reason: "approval", approval_id: approvalId, kind: a.kind });

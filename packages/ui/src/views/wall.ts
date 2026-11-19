@@ -1,5 +1,5 @@
 import type { Store } from "../../../daemon/src/store";
-import { esc, page } from "./inbox";
+import { esc, page } from "../html";
 
 export function wallData(store: Store) {
   return { items: store.listWorkItems() };
@@ -7,7 +7,10 @@ export function wallData(store: Store) {
 
 export function wallHtml(store: Store): string {
   const rows = wallData(store)
-    .items.map((i) => `<li><a href="/runs/${encodeURIComponent(i.id)}">${esc(i.id)}</a> ${esc(i.title)} [${esc(i.status)}]</li>`)
+    .items.map((i) => {
+      const enc = encodeURIComponent(i.id);
+      return `<li><a href="/runs/${enc}">${esc(i.id)}</a> ${esc(i.title)} [${esc(i.status)}] <a href="/runs/${enc}/pipeline">Pipeline</a></li>`;
+    })
     .join("");
   return page("Agent-Wand", `<h1>Agent-Wand</h1><ul>${rows || "<li>Keine Runs</li>"}</ul>`);
 }

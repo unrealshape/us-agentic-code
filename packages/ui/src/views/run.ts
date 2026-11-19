@@ -1,5 +1,5 @@
 import type { Store } from "../../../daemon/src/store";
-import { esc, page } from "./inbox";
+import { esc, page } from "../html";
 
 const WARNING_TYPES = new Set(["budget.exceeded"]);
 
@@ -14,5 +14,7 @@ export function runHtml(store: Store, id: string): string {
     .map((w) => `<p class="warn">Warnung: ${esc(w.type)} ${esc(JSON.stringify(w.data))}</p>`)
     .join("");
   const rows = events.map((e) => `<li>${esc(e.ts)} ${esc(e.type)} (${esc(e.actor)}) ${esc(JSON.stringify(e.data))}</li>`).join("");
-  return page(`Run ${id}`, `<h1>Run ${esc(id)}</h1>${warn}<ol>${rows}</ol>`);
+  const enc = encodeURIComponent(id);
+  const links = `<p><a href="/runs/${enc}/pipeline">Pipeline</a> · <a href="/runs/${enc}/review">Review</a></p>`;
+  return page(`Run ${id}`, `<h1>Run ${esc(id)}</h1>${links}${warn}<ol>${rows}</ol>`);
 }
