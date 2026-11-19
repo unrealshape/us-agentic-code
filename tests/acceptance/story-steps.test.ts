@@ -58,15 +58,20 @@ describe("Story-Verlauf (Abnahme)", () => {
     };
     const rev: Handler = async () => ({ output: { verdict: "approve", summary: "ok", findings: [], claims: [] } });
     // Der echte Plan-Schritt laeuft; der Tech Lead liefert einen Slice.
-    const techLead: Handler = async () => ({
-      output: {
-        summary: "ein Slice",
-        size: "small",
-        slices: [{ id: "S1", title: "Cooldown-Filter", criteria: ["AC-1"], files: [FILE], depends_on: [] }],
-        claims: [],
-        questions: [],
-      },
-    });
+    // Erster Versuch verweist auf ein unbekanntes Kriterium (ungueltig), der zweite ist gueltig.
+    let planCalls = 0;
+    const techLead: Handler = async () => {
+      const bad = planCalls++ === 0;
+      return {
+        output: {
+          summary: "ein Slice",
+          size: "small",
+          slices: [{ id: "S1", title: "Cooldown-Filter", criteria: [bad ? "AC-99" : "AC-1"], files: [FILE], depends_on: [] }],
+          claims: [],
+          questions: [],
+        },
+      };
+    };
     const runner = new ScriptedRunner({ "test-engineer": te, implementer: impl, "code-reviewer": rev, "tech-lead": techLead });
 
     const orch = createOrchestrator({ store, runner, pluginRoot: REPO_ROOT, home, approvals: { auto: ["h1"] }, graphify: false });
@@ -91,5 +96,12 @@ describe("Story-Verlauf (Abnahme)", () => {
     expect(slices[0]!.status).toBe("green");
     expect(slices[0]!.files).toEqual([FILE]);
     expect(steps.find((s) => s.role === "test-engineer")!.sliceId).toBe("S1");
+
+    // Planversionen: jeder Versuch steht in der Datenbank, auch der ungueltige.
+    const versions = store.listPlanVersions(wi.id);
+    expect(versions.map((v) => v.valid)).toEqual([false, true]);
+    expect(versions[0]!.errors.length).toBeGreaterThan(0);
+    expect(versions[1]!.slices.map((s) => s.id)).toEqual(["S1"]);
+    expect(versions.map((v) => v.attempt)).toEqual([1, 2]);
   }, 120_000);
 });

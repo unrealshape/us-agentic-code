@@ -128,6 +128,7 @@ export function createFeatureHandlers(): { spec: PhaseHandler; approve_spec: Pha
         continue;
       }
       const checked = checkPlan(ids, res.output, ctx.gateProfile);
+      ctx.store.recordPlanVersion(wi.id, { attempt, valid: checked.errors.length === 0, errors: checked.errors, slices: res.output.slices });
       if (checked.errors.length) {
         ctx.emit(wi, "plan.invalid", { errors: checked.errors });
         feedback = `Der Plan ist ungültig:\n${checked.errors.map((e) => `- ${e}`).join("\n")}`;

@@ -32,6 +32,17 @@ export interface Step {
   tokens: { input: number; output: number };
 }
 
+/** Ein Planungsversuch: die vom Tech-Lead gelieferten Slices und die Pruefergebnisse. */
+export interface PlanVersion {
+  id: number;
+  workItemId: string;
+  attempt: number;
+  valid: boolean;
+  errors: string[];
+  slices: { id: string; title: string; criteria: string[]; files: string[]; depends_on: string[] }[];
+  createdAt: string;
+}
+
 /** Ein Teilstueck einer Story mit eigenen Abnahmetests. */
 export interface SliceRecord {
   id: string;
@@ -114,6 +125,16 @@ CREATE TABLE IF NOT EXISTS steps (
   tokens_out INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS steps_wi ON steps(workitem_id, id);
+CREATE TABLE IF NOT EXISTS plan_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workitem_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  valid INTEGER NOT NULL,
+  errors TEXT NOT NULL,
+  slices TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS plan_versions_wi ON plan_versions(workitem_id, id);
 CREATE TABLE IF NOT EXISTS slices (
   workitem_id TEXT NOT NULL,
   id TEXT NOT NULL,
@@ -299,6 +320,31 @@ export class Store {
   }
 
   // ---- Slices --------------------------------------------------------------------
+
+  /** Ein Planungsversuch des Tech-Leads, gueltig oder nicht; bleibt dauerhaft erhalten. */
+  recordPlanVersion(workItemId: string, v: Omit<PlanVersion, "id" | "workItemId" | "createdAt">): PlanVersion {
+    const createdAt = new Date().toISOString();
+    const row = this.db
+      .query(
+        `INSERT INTO plan_versions (workitem_id, attempt, valid, errors, slices, created_at)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+      )
+      .get(workItemId, v.attempt, v.valid ? 1 : 0, JSON.stringify(v.errors), JSON.stringify(v.slices), createdAt) as { id: number };
+    return { id: row.id, workItemId, createdAt, ...v };
+  }
+
+  listPlanVersions(workItemId: string): PlanVersion[] {
+    const rows = this.db.query("SELECT * FROM plan_versions WHERE workitem_id = ? ORDER BY id").all(workItemId) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.id as number,
+      workItemId: r.workitem_id as string,
+      attempt: r.attempt as number,
+      valid: (r.valid as number) === 1,
+      errors: JSON.parse(r.errors as string) as string[],
+      slices: JSON.parse(r.slices as string) as { id: string; title: string; criteria: string[]; files: string[]; depends_on: string[] }[],
+      createdAt: r.created_at as string,
+    }));
+  }
 
   /** Ersetzt den Slice-Plan eines Auftrags; `order` bestimmt die Reihenfolge. */
   saveSlices(workItemId: string, slices: { id: string; title: string; criteria: string[]; files: string[]; depends_on: string[] }[], order: string[]): void {
