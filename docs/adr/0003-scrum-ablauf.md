@@ -1,4 +1,4 @@
-# ADR 0003: Scrum-Ablauf im Plugin (Entwurf)
+# ADR 0003: Ablauf in Zeiträumen im Plugin (Entwurf)
 
 Status: **Entwurf**
 Datum: 2026-11-18
@@ -6,24 +6,24 @@ Bezug: `docs/adr/0002-phase-1-entwurf.md`, Regel 5 aus `CLAUDE.md` (Orchestrator
 
 ## Kontext
 
-Das Team arbeitet agil. Der Ablauf im Plugin soll die Scrum-Rollen und -Termine abbilden, damit Planung, Fortschritt und Rückblick nachvollziehbar sind. Dabei gilt Regel 5: Reihenfolge, Gates und Eskalation entscheidet Code, nie ein Modell.
+Das Team arbeitet in festen Zeiträumen. Der Ablauf im Plugin soll Planung, Fortschritt und Rückblick nachvollziehbar dokumentieren. Dabei gilt Regel 5: Reihenfolge, Gates und Eskalation entscheidet Code, nie ein Modell.
 
 ## Zuordnung der Rollen
 
-| Scrum | Im Plugin | Wer |
+| Begriff | Im Plugin | Wer |
 |---|---|---|
 | Product Owner | du, über Freigaben (H1, H2, Spec) und Priorität im Backlog | Mensch |
-| Scrum Master | Orchestrator (deterministisch): Zeitraum-Grenzen, WIP-Limit, Eskalation | Code |
-| Entwicklungsteam | Agents (Analyst, Tech Lead, Implementer, Reviewer, …) | Modelle, nach `routing.yaml` |
+| Steuerung | Orchestrator (deterministisch): Zeitraum-Grenzen, WIP-Limit, Eskalation | Code |
+| Team | Agents (Analyst, Tech Lead, Implementer, Reviewer, …) | Modelle, nach `routing.yaml` |
 | Backlog | Work-Items im Store, sortiert nach deiner Priorität | Store |
 
 ## Termine
 
 - **Zeitraum:** feste Zeitbox von 7 Tagen ab einem Startdatum (`periodStart`, `periodDays`). Die Zeiträume sind fest: Das Erreichen der Kontingent-Schwelle (ab 75 %, ADR 0002) beendet sie nicht. Länge ist konfigurierbar.
 - **Planung je Zeitraum:** Der Orchestrator zieht Work-Items aus dem Backlog, bis die Kapazität erreicht ist. Kapazität = Kontingent-Budget des Zeitraums, nicht Stunden. Du bestätigst den Zeitraum (Freigabe).
-- **Daily:** kein Meeting. Ein automatischer Statusbericht je Run aus dem Event-Log: erledigt, läuft, blockiert (Freigabe ausstehend oder Eskalation).
-- **Review je Zeitraum:** Du prüfst die gemergten PRs und die offenen Freigaben im UI.
-- **Retrospektive:** Die Learner-Rolle (Haiku) schlägt Lernregeln vor, aus Fehlversuchen und Eskalationen. Du entscheidest, ob sie übernommen werden. Keine Regel gilt ohne deine Freigabe.
+- **Statusbericht:** Automatisch je Run aus dem Event-Log: erledigt, läuft, blockiert (Freigabe ausstehend oder Eskalation).
+- **Abschluss je Zeitraum:** Du prüfst die gemergten PRs und die offenen Freigaben im UI.
+- **Lernbericht:** Die Learner-Rolle (Haiku) schlägt Lernregeln vor, aus Fehlversuchen und Eskalationen. Du entscheidest, ob sie übernommen werden. Keine Regel gilt ohne deine Freigabe.
 
 ## Definition of Done
 
