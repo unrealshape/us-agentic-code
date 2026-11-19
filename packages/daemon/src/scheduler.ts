@@ -6,6 +6,7 @@ import { basename } from "node:path";
 import type { RunResult } from "./orchestrator";
 import type { Store, WorkItem } from "./store";
 import { HEARTBEAT_MS, LEASE_TIMEOUT_MS, ensureLeaseSchema, expireLeases } from "./leases";
+import { NightConfig, isInWindow, nightReport, nightTokensUsed, windowEnd, windowStart } from "./night";
 
 export const MAX_PARALLEL = 3;
 
@@ -94,6 +95,13 @@ export interface SchedulerOptions {
   run: (id: string) => Promise<RunResult>;
   maxParallel?: number;
   now?: () => number;
+  /** Nachtbetrieb: Auftraege mit `state.night === true` starten nur im Fenster und innerhalb des Budgets. */
+  night?: NightConfig;
+}
+
+/** Kennung des Morgenberichts je Nacht: `night_report`-Freigaben haengen an keinem Auftrag. */
+function nightId(since: Date): string {
+  return `night:${since.toISOString()}`;
 }
 
 export interface Scheduler {
@@ -109,6 +117,35 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
   ensureSlotSchema(store);
   ensureLeaseSchema(store);
   const running = new Map<string, Promise<void>>();
+  const night = opts.night ?? NightConfig.parse({});
+
+  /** Schreibt `night.budget_reached` hoechstens einmal je Nacht (Dedup ueber das Event-Log, prozessuebergreifend). */
+  function budgetReachedOnce(since: Date, t: number, used: number): void {
+    const seen = store.events({ type: "night.budget_reached" }).some((e) => new Date(e.ts).getTime() >= since.getTime());
+    if (seen) return;
+    store.append({
+      ts: new Date(t).toISOString(),
+      traceId: nightId(since),
+      spanId: nightId(since),
+      parentSpanId: null,
+      project: "usac",
+      type: "night.budget_reached",
+      actor: "orchestrator",
+      data: { since: since.toISOString(), used, max_tokens: night.max_tokens },
+    });
+  }
+
+  /** Morgenbericht: erster Tick nach Fensterende legt je Nacht genau eine offene Freigabe `night_report` an. Blockiert nicht. */
+  function morningReportOnce(t: number): void {
+    const d = new Date(t);
+    if (isInWindow(d, night.window)) return;
+    const since = windowStart(d, night.window);
+    const until = windowEnd(since, night.window);
+    const existing = store.db.query("SELECT context FROM approvals WHERE kind = 'night_report'").all() as { context: string }[];
+    if (existing.some((r) => (JSON.parse(r.context) as { since?: string }).since === since.toISOString())) return;
+    const report = nightReport(store.events(), since, until);
+    store.createApproval(nightId(since), "night_report", { since: since.toISOString(), until: until.toISOString(), ...report });
+  }
 
   function start(id: string): void {
     const wi = store.getWorkItem(id)!;
@@ -149,12 +186,24 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
       for (const id of running.keys()) slotHeartbeat(store, id, t);
       expireSlots(store, t);
       expireLeases(store, t);
+      morningReportOnce(t);
       const queued = store.db
         .query("SELECT id FROM workitems WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC")
         .all() as { id: string }[];
       const started: string[] = [];
       for (const { id } of queued) {
         if (running.has(id)) continue;
+        const wi = store.getWorkItem(id);
+        if (wi?.state.night === true) {
+          const d = new Date(t);
+          if (!isInWindow(d, night.window)) continue;
+          const since = windowStart(d, night.window);
+          const used = nightTokensUsed(store.events({ type: "run.finished" }), since);
+          if (used >= night.max_tokens) {
+            budgetReachedOnce(since, t, used);
+            continue;
+          }
+        }
         if (!tryAcquireSlot(store, id, max, t)) continue;
         started.push(id);
         start(id);
