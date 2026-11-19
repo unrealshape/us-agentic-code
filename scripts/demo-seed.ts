@@ -71,6 +71,16 @@ const steps: [string, string, string, boolean, string[], number, number][] = [
   ["implementer", "sonnet", "implement", true, ["src/rotation.lua"], 2, 1],
   ["code-reviewer", "opus", "review", true, [], 1, 0],
 ];
+store.saveSlices(
+  "wi_0142",
+  [
+    { id: "S1", title: "Zauber auf Cooldown nicht waehlen", criteria: ["AC-1"], files: ["src/rotation.lua"], depends_on: [] },
+    { id: "S2", title: "Cooldown-Anzeige im Menue", criteria: ["AC-2"], files: ["src/menu.lua"], depends_on: ["S1"] },
+  ],
+  ["S1", "S2"],
+);
+store.setSliceStatus("wi_0142", "S1", "green");
+store.setSliceStatus("wi_0142", "S2", "pending");
 for (const [role, model, _phase, ok, files, startMin, endMin] of steps) {
   store.recordStep({
     workItemId: "wi_0142",
@@ -81,6 +91,7 @@ for (const [role, model, _phase, ok, files, startMin, endMin] of steps) {
     files,
     startedAt: iso(startMin),
     endedAt: iso(endMin),
+    ...(role === "test-engineer" || role === "implementer" ? { sliceId: "S1" } : {}),
   });
 }
 

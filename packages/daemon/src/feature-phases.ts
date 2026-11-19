@@ -141,6 +141,7 @@ export function createFeatureHandlers(): { spec: PhaseHandler; approve_spec: Pha
         wi = ctx.store.getWorkItem(wi.id)!;
         ctx.emit(wi, "workitem.classified", { size: checked.plan.size, by: "tech-lead" });
       }
+      ctx.store.saveSlices(wi.id, checked.plan.slices, order);
       ctx.emit(wi, "plan.created", { slices: checked.plan.slices.map((x) => x.id), order });
       return ctx.save(wi, { slices: checked.plan.slices, sliceOrder: order });
     }

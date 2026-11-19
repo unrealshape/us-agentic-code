@@ -28,6 +28,18 @@ export interface Step {
   files: string[];
   startedAt: string;
   endedAt: string;
+  sliceId?: string;
+}
+
+/** Ein Teilstueck einer Story mit eigenen Abnahmetests. */
+export interface SliceRecord {
+  id: string;
+  title: string;
+  position: number;
+  criteria: string[];
+  files: string[];
+  dependsOn: string[];
+  status: "pending" | "red" | "green";
 }
 
 export interface GateResult {
@@ -95,9 +107,21 @@ CREATE TABLE IF NOT EXISTS steps (
   reason TEXT,
   files TEXT NOT NULL DEFAULT '[]',
   started_at TEXT NOT NULL,
-  ended_at TEXT NOT NULL
+  ended_at TEXT NOT NULL,
+  slice_id TEXT
 );
 CREATE INDEX IF NOT EXISTS steps_wi ON steps(workitem_id, id);
+CREATE TABLE IF NOT EXISTS slices (
+  workitem_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  criteria TEXT NOT NULL,
+  files TEXT NOT NULL,
+  depends_on TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  PRIMARY KEY (workitem_id, id)
+);
 CREATE TABLE IF NOT EXISTS acceptance_locks (
   workitem_id TEXT PRIMARY KEY,
   files TEXT NOT NULL,
@@ -123,6 +147,12 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // Bestehende Datenbanken aus dem Stand vor den Slices: Spalte nachruesten (Fehler = Spalte gibt es schon).
+    try {
+      this.db.exec("ALTER TABLE steps ADD COLUMN slice_id TEXT");
+    } catch {
+      // schon vorhanden
+    }
   }
 
   // ---- Events (nur anhaengen) ----------------------------------------------
@@ -222,10 +252,20 @@ export class Store {
   recordStep(s: Omit<Step, "id">): Step {
     const row = this.db
       .query(
-        `INSERT INTO steps (workitem_id, role, model, ok, reason, files, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO steps (workitem_id, role, model, ok, reason, files, started_at, ended_at, slice_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
-      .get(s.workItemId, s.role, s.model, s.ok ? 1 : 0, s.reason ?? null, JSON.stringify(s.files), s.startedAt, s.endedAt) as { id: number };
+      .get(
+        s.workItemId,
+        s.role,
+        s.model,
+        s.ok ? 1 : 0,
+        s.reason ?? null,
+        JSON.stringify(s.files),
+        s.startedAt,
+        s.endedAt,
+        s.sliceId ?? null,
+      ) as { id: number };
     return { ...s, id: row.id };
   }
 
@@ -246,6 +286,39 @@ export class Store {
       files: JSON.parse(r.files as string) as string[],
       startedAt: r.started_at as string,
       endedAt: r.ended_at as string,
+      ...(r.slice_id ? { sliceId: r.slice_id as string } : {}),
+    }));
+  }
+
+  // ---- Slices --------------------------------------------------------------------
+
+  /** Ersetzt den Slice-Plan eines Auftrags; `order` bestimmt die Reihenfolge. */
+  saveSlices(workItemId: string, slices: { id: string; title: string; criteria: string[]; files: string[]; depends_on: string[] }[], order: string[]): void {
+    this.db.query("DELETE FROM slices WHERE workitem_id = ?").run(workItemId);
+    for (const s of slices) {
+      this.db
+        .query(
+          `INSERT INTO slices (workitem_id, id, position, title, criteria, files, depends_on, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        )
+        .run(workItemId, s.id, Math.max(0, order.indexOf(s.id)), s.title, JSON.stringify(s.criteria), JSON.stringify(s.files), JSON.stringify(s.depends_on));
+    }
+  }
+
+  setSliceStatus(workItemId: string, id: string, status: SliceRecord["status"]): void {
+    this.db.query("UPDATE slices SET status = ? WHERE workitem_id = ? AND id = ?").run(status, workItemId, id);
+  }
+
+  listSlices(workItemId: string): SliceRecord[] {
+    const rows = this.db.query("SELECT * FROM slices WHERE workitem_id = ? ORDER BY position").all(workItemId) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.id as string,
+      title: r.title as string,
+      position: r.position as number,
+      criteria: JSON.parse(r.criteria as string) as string[],
+      files: JSON.parse(r.files as string) as string[],
+      dependsOn: JSON.parse(r.depends_on as string) as string[],
+      status: r.status as SliceRecord["status"],
     }));
   }
 

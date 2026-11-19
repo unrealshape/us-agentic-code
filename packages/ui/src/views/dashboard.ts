@@ -15,6 +15,7 @@ export function dashboardData(store: Store, storyId?: string) {
   return {
     stories,
     story: storyId ?? null,
+    slices: storyId ? store.listSlices(storyId) : [],
     steps,
     tables: store.tableCounts(),
     events: store.recentEvents(30).map((e) => ({ id: e.id, ts: e.ts, type: e.type, actor: e.actor, traceId: e.traceId })),
@@ -77,6 +78,19 @@ const SCRIPT = `
   var seen = null, lastOk = Date.now(), data = JSON.parse(document.getElementById("initial").textContent);
   function el(tag, cls, text){ var n = document.createElement(tag); if(cls) n.className = cls; if(text !== undefined) n.textContent = text; return n; }
   function render(d){
+    var sl = document.getElementById("slices"); sl.textContent = "";
+    if(!d.slices.length){ sl.appendChild(el("div","empty","Kein Slice-Plan für diese Auswahl.")); }
+    d.slices.forEach(function(s){
+      var row = el("div","step");
+      row.appendChild(el("span","light "+(s.status==="green"?"ok":s.status==="red"?"err":"")));
+      var mid = el("div");
+      mid.appendChild(el("div","role", s.id + " · " + s.title));
+      mid.appendChild(el("div","meta", "Kriterien: " + s.criteria.join(", ") + (s.dependsOn.length ? " · nach " + s.dependsOn.join(", ") : "")));
+      if(s.files.length) mid.appendChild(el("div","files", s.files.join("  ·  ")));
+      row.appendChild(mid);
+      row.appendChild(el("span","count", s.status));
+      sl.appendChild(row);
+    });
     var steps = document.getElementById("steps"); steps.textContent = "";
     if(!d.steps.length){ steps.appendChild(el("div","empty","Noch keine Schritte für diese Auswahl.")); }
     d.steps.forEach(function(s){
@@ -84,7 +98,7 @@ const SCRIPT = `
       row.appendChild(el("span","light "+(s.ok?"ok":"err")));
       var mid = el("div");
       mid.appendChild(el("div","role", s.role));
-      mid.appendChild(el("div","meta", s.model + " · " + s.startedAt.slice(11,19) + "–" + s.endedAt.slice(11,19)));
+      mid.appendChild(el("div","meta", s.model + (s.sliceId ? " · " + s.sliceId : "") + " · " + s.startedAt.slice(11,19) + "–" + s.endedAt.slice(11,19)));
       if(s.files.length) mid.appendChild(el("div","files", s.files.join("  ·  ")));
       if(s.reason) mid.appendChild(el("div","reason", s.reason));
       row.appendChild(mid);
@@ -154,6 +168,7 @@ export function dashboardHtml(store: Store, storyId?: string): string {
     `<div class="tile"><div class="lbl">Erfolgreich</div><div class="val" id="t-ok">${d.steps.filter((s) => s.ok).length}</div></div>` +
     `<div class="tile"><div class="lbl">Dateien</div><div class="val" id="t-files">${new Set(d.steps.flatMap((s) => s.files)).size}</div></div>` +
     `</div>` +
+    `<section class="card"><h2>Slices</h2><div id="slices"></div></section>` +
     `<section class="card"><h2>Verlauf</h2><div id="steps"></div></section>` +
     `<section class="card"><h2>Datenbank · Einblender (live)</h2><table><thead><tr><th>id</th><th>zeit</th><th>typ</th><th>akteur</th></tr></thead><tbody id="events"></tbody></table></section>` +
     `</main>` +

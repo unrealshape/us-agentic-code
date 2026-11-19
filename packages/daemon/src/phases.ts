@@ -53,7 +53,7 @@ export interface PhaseContext {
 }
 
 /** Zusatzoptionen einer Session: gesperrte Werkzeuge und zusaetzliche Umgebung (ausgewertet ab Task 9). */
-export type RunRoleOptions = { disallowedTools?: string[]; env?: Record<string, string> };
+export type RunRoleOptions = { disallowedTools?: string[]; env?: Record<string, string>; slice?: string };
 
 /** Startet eine Rolle, validiert Schema und Belege. Ungueltige Ausgaben gelten als Fehlversuch. */
 export type RunRole = <R extends RoleWithOutput>(

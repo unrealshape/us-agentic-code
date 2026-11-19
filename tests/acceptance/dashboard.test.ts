@@ -20,6 +20,15 @@ function seeded() {
     startedAt: "2026-11-19T10:00:00.000Z",
     endedAt: "2026-11-19T10:01:00.000Z",
   });
+  store.saveSlices(
+    "wi_1",
+    [
+      { id: "S1", title: "Cooldown-Filter", criteria: ["AC-1"], files: ["src/rotation.lua"], depends_on: [] },
+      { id: "S2", title: "Anzeige", criteria: ["AC-2"], files: ["src/menu.lua"], depends_on: ["S1"] },
+    ],
+    ["S1", "S2"],
+  );
+  store.setSliceStatus("wi_1", "S1", "green");
   return store;
 }
 
@@ -39,6 +48,19 @@ describe("Dashboard (Abnahme)", () => {
     expect(body.steps[0]!.files).toEqual(["src/rotation.lua"]);
     expect(Object.keys(body.tables)).toEqual(expect.arrayContaining(["events", "steps", "gate_results", "workitems"]));
     expect(body.tables.steps).toBe(1);
+  });
+
+  test("/api/dashboard?story=<id> liefert die Slices mit Status in Reihenfolge", async () => {
+    const store = seeded();
+    const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });
+    const body = (await (await app.request("/api/dashboard?story=wi_1")).json()) as {
+      slices: { id: string; title: string; status: string; dependsOn: string[] }[];
+    };
+    expect(body.slices.map((s) => [s.id, s.status])).toEqual([
+      ["S1", "green"],
+      ["S2", "pending"],
+    ]);
+    expect(body.slices[1]!.dependsOn).toEqual(["S1"]);
   });
 
   test("/api/dashboard?story=<id> filtert die Schritte auf eine Story", async () => {

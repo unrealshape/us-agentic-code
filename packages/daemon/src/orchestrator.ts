@@ -174,7 +174,7 @@ async function writeRedTest(wi: WorkItem, ctx: PhaseContext, input?: SliceInput,
       budgetUsed: ctx.budgetUsed(),
       available: ctx.available,
     });
-    const res = await ctx.runRole(wi, "test-engineer", route.model, testEngineerPrompt(wi, feedback, input));
+    const res = await ctx.runRole(wi, "test-engineer", route.model, testEngineerPrompt(wi, feedback, input), input ? { slice: input.slice.id } : {});
     // Eigene Aenderungen dieses Versuchs; Tests frueherer Slices bleiben davon ausgenommen.
     const own = async () => (await changedFiles(wi.worktree!, base)).filter((p) => !saved.has(p));
     const touched = earlier.filter((f) => !existsSync(join(wi.worktree!, f)) || !readFileSync(join(wi.worktree!, f)).equals(saved.get(f)!));
@@ -208,6 +208,7 @@ async function writeRedTest(wi: WorkItem, ctx: PhaseContext, input?: SliceInput,
       continue;
     }
     ctx.emit(wi, "acceptance.red", { ...sliceData, gate_result_id: gate.id, files });
+    if (input) ctx.store.setSliceStatus(wi.id, input.slice.id, "red");
     return { files, gateId: gate.id };
   }
   throw new Escalate(
@@ -331,14 +332,15 @@ registerPhase("implement", async (wi, ctx) => {
       const all = summarize([...stages.results, ...accs]);
       gateEvents(ctx, wi, all.results);
       if (all.passed) {
-        groups.forEach((g, i) =>
+        groups.forEach((g, i) => {
+          if (g.slice) ctx.store.setSliceStatus(wi.id, g.slice, "green");
           ctx.emit(wi, "acceptance.green", {
             ...(g.slice ? { slice: g.slice } : {}),
             gate_result_id: accs[i]!.id,
             model: route.model,
             attempt: failures + 1,
-          }),
-        );
+          });
+        });
         return ctx.save(wi, { lastFailure: undefined, lastImplModel: route.model });
       }
       failure = all.failureOutput;
@@ -545,6 +547,7 @@ export function createOrchestrator(opts: OrchestratorOptions) {
       files,
       startedAt,
       endedAt: new Date().toISOString(),
+      ...(roleOpts.slice ? { sliceId: roleOpts.slice } : {}),
     });
     return res;
   }

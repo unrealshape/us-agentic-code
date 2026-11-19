@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ACCEPTANCE_SPEC, FIXED_ROTATION, REPO_ROOT, setupProject, tempHome } from "../helpers";
 import { createOrchestrator } from "../../packages/daemon/src/orchestrator";
+import { createFeatureHandlers } from "../../packages/daemon/src/feature-phases";
 import { registerPhase, restorePhases, snapshotPhases, type PhaseSnapshot } from "../../packages/daemon/src/phases";
 import { createIntegratorHandlers, realGit, type CmdResult, type GitRunner } from "../../packages/daemon/src/integrator";
 import { ScriptedRunner, type Handler } from "../../packages/daemon/src/runner/scripted";
@@ -24,12 +25,7 @@ beforeEach(() => {
     ctx.save(wi, { spec: { summary: "s", title: wi.title, criteria, out_of_scope: [], claims: [], questions: [] } }),
   );
   registerPhase("approve_spec", async (wi) => wi);
-  registerPhase("plan", async (wi, ctx) =>
-    ctx.save(wi, {
-      slices: [{ id: "S1", title: "s", criteria: ["AC-1"], files: [FILE], depends_on: [] }],
-      sliceOrder: ["S1"],
-    }),
-  );
+  registerPhase("plan", createFeatureHandlers().plan);
   // Attrappen fuer die Schlussphasen: push ohne Remote, gh ohne Netz (der Lauf endet vor H2).
   const git: GitRunner = async (cwd, args) => (args[0] === "push" ? { exitCode: 0, output: "" } : realGit(cwd, args));
   const gh = async (_cwd: string, args: string[]): Promise<CmdResult> => {
@@ -61,7 +57,17 @@ describe("Story-Verlauf (Abnahme)", () => {
       return { output: { summary: "umgesetzt", changed_files: [FILE], claims: [] } };
     };
     const rev: Handler = async () => ({ output: { verdict: "approve", summary: "ok", findings: [], claims: [] } });
-    const runner = new ScriptedRunner({ "test-engineer": te, implementer: impl, "code-reviewer": rev });
+    // Der echte Plan-Schritt laeuft; der Tech Lead liefert einen Slice.
+    const techLead: Handler = async () => ({
+      output: {
+        summary: "ein Slice",
+        size: "small",
+        slices: [{ id: "S1", title: "Cooldown-Filter", criteria: ["AC-1"], files: [FILE], depends_on: [] }],
+        claims: [],
+        questions: [],
+      },
+    });
+    const runner = new ScriptedRunner({ "test-engineer": te, implementer: impl, "code-reviewer": rev, "tech-lead": techLead });
 
     const orch = createOrchestrator({ store, runner, pluginRoot: REPO_ROOT, home, approvals: { auto: ["h1"] }, graphify: false });
     const wi = await orch.submit({ projectPath: project, type: "feature", title: "Story Schritte", description: "x" });
@@ -78,5 +84,12 @@ describe("Story-Verlauf (Abnahme)", () => {
     expect(implStep.files).toEqual([FILE]);
     expect(implStep.startedAt).toBeTruthy();
     expect(implStep.endedAt).toBeTruthy();
+
+    // Slices: der Plan wird als Slices gespeichert, jeder Abnahmetest gehoert zu seinem Slice.
+    const slices = store.listSlices(wi.id);
+    expect(slices.map((s) => s.id)).toEqual(["S1"]);
+    expect(slices[0]!.status).toBe("green");
+    expect(slices[0]!.files).toEqual([FILE]);
+    expect(steps.find((s) => s.role === "test-engineer")!.sliceId).toBe("S1");
   }, 120_000);
 });
