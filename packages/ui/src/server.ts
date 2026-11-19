@@ -49,7 +49,7 @@ const STATIC: [string, string][] = [
 
 export function createApp(store: Store, deps?: AppDeps): Hono {
   const app = new Hono();
-  app.get("/", (c) => c.html(inboxHtml(store)));
+  app.get("/", (c) => c.html(inboxHtml(store, deps?.guard?.token)));
   app.get("/wall", (c) => c.html(wallHtml(store)));
   app.get("/runs/:id", (c) => c.html(runHtml(store, c.req.param("id"))));
   app.get("/api/inbox", (c) => c.json(inboxData(store)));

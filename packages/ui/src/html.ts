@@ -17,6 +17,7 @@ header.top{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:
 header.top .brand{font-weight:800;letter-spacing:.14em;text-transform:uppercase;font-size:12px}
 header.top nav{display:flex;gap:2px;flex-wrap:wrap}
 header.top nav a{color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:6px;font-size:13px}
+.notify{margin-left:auto;font:inherit;font-size:12px;background:var(--panel2);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
 header.top nav a:hover{color:var(--text);background:var(--panel2)}
 header.top nav a[aria-current="page"]{color:var(--text);background:var(--panel2);box-shadow:inset 0 -2px 0 var(--run)}
 main{max-width:1280px;margin:0 auto;padding:20px 20px 64px}
@@ -48,6 +49,16 @@ code{font:12px ui-monospace,Consolas,monospace;color:var(--muted)}
 .badge.ok{color:var(--ok)}
 .badge.err{color:var(--err)}
 .badge.info{color:var(--run)}
+button.act{font:inherit;font-size:12px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+button.act:disabled{color:var(--muted);cursor:default}
+.appr .btns{margin-left:4px}
+.appr .rowmsg{display:block;color:var(--err);font-size:12px;margin-top:4px}
+.pick{display:block;width:100%;text-align:left;background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer}
+.pick .id{display:block;font:12px ui-monospace,Consolas,monospace;color:var(--muted)}
+.pick .t{display:block;font-weight:600;margin:2px 0 6px}
+.tile.sel{border-color:var(--run)}
+.detail{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--run);outline-offset:2px}
 ol.events{list-style:none;padding:0;margin:0;font:13px ui-monospace,Consolas,monospace}
 ol.events li{padding:6px 0;border-bottom:1px solid var(--line);color:var(--text)}
 ol.events li:last-child{border-bottom:0}
@@ -74,7 +85,7 @@ export function page(title: string, body: string, opts: { token?: string } = {})
     `<title>${esc(title)}</title>` +
     `<meta name="color-scheme" content="dark">${token}<style>${STYLE}</style>` +
     `<link rel="manifest" href="/manifest.webmanifest">` +
-    `<script src="/palette.js" defer></script>` +
-    `</head><body><header class="top"><span class="brand">usac</span><nav aria-label="Hauptnavigation">${nav}</nav></header><main>${body}</main></body></html>`
+    `<script src="/palette.js" defer></script><script type="module" src="/notify.js"></script>` +
+    `</head><body><header class="top"><span class="brand">usac</span><nav aria-label="Hauptnavigation">${nav}</nav><button id="notify-enable" type="button" class="notify">Benachrichtigungen</button></header><main>${body}</main></body></html>`
   );
 }

@@ -9,17 +9,13 @@ import { suggestDowngrades } from "../../../daemon/src/downgrade";
 import type { RoutingConfig } from "../../../daemon/src/routing";
 import { esc, page } from "../html";
 
+/** Stil kommt aus html.ts (Kontrollraum). Hier nur Grafik- und Tabellenregeln. */
 const STYLE = `<style>
-:root{--bg:#fff;--text:#1a1a1a;--muted:#555;--bar:#2b6cb0;--grid:#d0d0d0}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111;--text:#eee;--muted:#aaa;--bar:#63b3ed;--grid:#444}}
-:root[data-theme="dark"]{--bg:#111;--text:#eee;--muted:#aaa;--bar:#63b3ed;--grid:#444}
-body{background:var(--bg);color:var(--text)}
-svg text{fill:var(--text);font-size:12px}
-svg rect.bar{fill:var(--bar)}
-table{border-collapse:collapse;margin:.5rem 0 1.5rem}
-td,th{border-bottom:1px solid var(--grid);padding:.25rem .6rem;text-align:left}
-figure{margin:1.5rem 0}
-figcaption{color:var(--muted)}
+svg text{fill:var(--muted);font-size:12px}
+svg rect.bar{fill:var(--run)}
+figure{margin:0 0 16px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+figcaption{color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}
+table{margin:8px 0 18px}
 </style>`;
 
 const BAR_ROW = 26;
@@ -109,7 +105,7 @@ function downgradeSection(m: Metrics, routing: RoutingConfig): string {
       `(Belege: ${e.runs} Laeufe, Erstversuch ${pct(e.firstPassRate)}, ${e.escalations} Eskalationen)</li>`
     );
   });
-  return `<h2>Vorschlaege zum Herabstufen</h2>${items.length ? `<ul>${items.join("")}</ul>` : "<p>Keine Vorschlaege.</p>"}`;
+  return `<h2>Vorschläge zum Herabstufen</h2><div class="card">${items.length ? `<ul>${items.join("")}</ul>` : `<p class="muted">Keine Vorschläge.</p>`}</div>`;
 }
 
 /** Vollstaendige Metrik-Seite. Liest das Event-Log, rechnet nichts ausserhalb von `computeMetrics`/`suggestDowngrades`. */
