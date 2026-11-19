@@ -99,6 +99,26 @@ bunx tsc -p tsconfig.json --noEmit
 bun packages/daemon/src/cli.ts doctor
 ```
 
+## 4. Als Claude-Code-Plugin installieren
+
+Das Repo ist gleichzeitig ein Plugin-Marketplace (`.claude-plugin/marketplace.json`) mit dem Plugin `usac`. Prüfen mit `claude plugin validate .` (Stand: bestanden, mit Hinweisen zu Icon und Netzwerk-Hosts).
+
+**Variante A: aus dem lokalen Ordner** (sofort möglich, nimmt den Stand, den du ausgecheckt hast):
+
+```powershell
+claude plugin marketplace add C:\Users\<name>\Desktop\dev\us-agentic-code-phase1
+claude plugin install usac@us-agentic-code
+```
+
+**Variante B: direkt von GitHub** (`unrealshape/us-agentic-code`). Der Branch `main` enthält den aktuellen Stand noch nicht, er liegt auf `feature/phase-1`. Eine Syntax für Branches ist mit `claude plugin marketplace add --help` nicht belegt. Deshalb vorerst Variante A oder Variante B nach dem Merge in `main`:
+
+```powershell
+claude plugin marketplace add unrealshape/us-agentic-code
+claude plugin install usac@us-agentic-code
+```
+
+Danach in Claude Code `/plugin` aufrufen und prüfen, dass `usac` aktiv ist. Ein Icon ist noch nicht hinterlegt (Hinweis `ICON_MISSING`, nur für den Plugin-Katalog relevant).
+
 ## Fehlersuche
 
 | Symptom | Ursache | Abhilfe |
