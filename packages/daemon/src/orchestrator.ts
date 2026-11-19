@@ -519,8 +519,38 @@ export function createOrchestrator(opts: OrchestratorOptions) {
     return loadWorkflow(existsSync(own) ? own : join(pluginRoot, "workflows", "bugfix.yaml"));
   }
 
-  /** Startet eine Rolle, validiert Schema und Belege. Ungueltige Ausgaben gelten als Fehlversuch. */
+  /** Betroffene Dateien eines Rollen-Ergebnisses: geaenderte Dateien bzw. Abnahmetests. */
+  function stepFiles(output: unknown): string[] {
+    const o = output as { changed_files?: string[]; acceptance_tests?: string[] };
+    return o.changed_files ?? o.acceptance_tests ?? [];
+  }
+
+  /** Startet eine Rolle und speichert den Aufruf als Story-Schritt (Rolle, Modell, Ergebnis, Dateien, Zeitraum). */
   async function runRole<R extends RoleWithOutput>(
+    wi: WorkItem,
+    role: R,
+    model: Model,
+    prompt: string,
+    roleOpts: RunRoleOptions = {},
+  ): Promise<{ ok: true; output: z.infer<(typeof ROLE_OUTPUTS)[R]> } | { ok: false; feedback: string }> {
+    const startedAt = new Date().toISOString();
+    const res = await runRoleInner(wi, role, model, prompt, roleOpts);
+    const files = res.ok ? stepFiles(res.output) : [];
+    store.recordStep({
+      workItemId: wi.id,
+      role,
+      model,
+      ok: res.ok,
+      ...(res.ok ? {} : { reason: res.feedback.slice(0, 500) }),
+      files,
+      startedAt,
+      endedAt: new Date().toISOString(),
+    });
+    return res;
+  }
+
+  /** Startet eine Rolle, validiert Schema und Belege. Ungueltige Ausgaben gelten als Fehlversuch. */
+  async function runRoleInner<R extends RoleWithOutput>(
     wi: WorkItem,
     role: R,
     model: Model,

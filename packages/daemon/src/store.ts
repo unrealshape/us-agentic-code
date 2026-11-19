@@ -17,6 +17,19 @@ export interface WorkItem {
   createdAt: string;
 }
 
+/** Ein Rollen-Aufruf eines Auftrags (Story-Verlauf). */
+export interface Step {
+  id: number;
+  workItemId: string;
+  role: string;
+  model: string;
+  ok: boolean;
+  reason?: string;
+  files: string[];
+  startedAt: string;
+  endedAt: string;
+}
+
 export interface GateResult {
   id: number;
   workItemId: string;
@@ -73,6 +86,18 @@ CREATE TABLE IF NOT EXISTS gate_results (
   duration_ms INTEGER NOT NULL,
   output TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workitem_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  model TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  reason TEXT,
+  files TEXT NOT NULL DEFAULT '[]',
+  started_at TEXT NOT NULL,
+  ended_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS steps_wi ON steps(workitem_id, id);
 CREATE TABLE IF NOT EXISTS acceptance_locks (
   workitem_id TEXT PRIMARY KEY,
   files TEXT NOT NULL,
@@ -189,6 +214,34 @@ export class Store {
     this.db
       .query("UPDATE workitems SET status = ?, branch = ?, worktree = ?, state = ?, size = ? WHERE id = ?")
       .run(next.status, next.branch, next.worktree, JSON.stringify(next.state), next.size, id);
+  }
+
+  // ---- Story-Schritte ------------------------------------------------------------
+
+  /** Ein Rollen-Aufruf eines Auftrags: Rolle, Modell, Ergebnis, betroffene Dateien, Zeitraum. */
+  recordStep(s: Omit<Step, "id">): Step {
+    const row = this.db
+      .query(
+        `INSERT INTO steps (workitem_id, role, model, ok, reason, files, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      )
+      .get(s.workItemId, s.role, s.model, s.ok ? 1 : 0, s.reason ?? null, JSON.stringify(s.files), s.startedAt, s.endedAt) as { id: number };
+    return { ...s, id: row.id };
+  }
+
+  listSteps(workItemId: string): Step[] {
+    const rows = this.db.query("SELECT * FROM steps WHERE workitem_id = ? ORDER BY id").all(workItemId) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.id as number,
+      workItemId: r.workitem_id as string,
+      role: r.role as string,
+      model: r.model as string,
+      ok: (r.ok as number) === 1,
+      reason: (r.reason as string | null) ?? undefined,
+      files: JSON.parse(r.files as string) as string[],
+      startedAt: r.started_at as string,
+      endedAt: r.ended_at as string,
+    }));
   }
 
   // ---- Gates ---------------------------------------------------------------------
