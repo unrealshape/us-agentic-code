@@ -81,10 +81,19 @@ store.saveSlices(
 );
 store.setSliceStatus("wi_0142", "S1", "green");
 store.setSliceStatus("wi_0142", "S2", "pending");
-for (const [role, model, _phase, ok, files, startMin, endMin] of steps) {
+// Tokens je Schritt (Eingabe, Ausgabe), passend zur Reihenfolge oben.
+const tokens: [number, number][] = [
+  [52000, 3100],
+  [38000, 4200],
+  [61000, 9800],
+  [47000, 7600],
+  [22000, 2500],
+];
+steps.forEach(([role, model, _phase, ok, files, startMin, endMin], i) => {
   store.recordStep({
     workItemId: "wi_0142",
     role,
+    tokens: { input: tokens[i]![0], output: tokens[i]![1] },
     model,
     ok,
     ...(ok ? {} : { reason: "Abnahmetest rot: Cooldown-Filter fehlt" }),
@@ -93,7 +102,7 @@ for (const [role, model, _phase, ok, files, startMin, endMin] of steps) {
     endedAt: iso(endMin),
     ...(role === "test-engineer" || role === "implementer" ? { sliceId: "S1" } : {}),
   });
-}
+});
 
 store.close();
 console.log(`Demo-Datenbank befuellt: ${path}`);

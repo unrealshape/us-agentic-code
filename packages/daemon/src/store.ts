@@ -29,6 +29,7 @@ export interface Step {
   startedAt: string;
   endedAt: string;
   sliceId?: string;
+  tokens: { input: number; output: number };
 }
 
 /** Ein Teilstueck einer Story mit eigenen Abnahmetests. */
@@ -108,7 +109,9 @@ CREATE TABLE IF NOT EXISTS steps (
   files TEXT NOT NULL DEFAULT '[]',
   started_at TEXT NOT NULL,
   ended_at TEXT NOT NULL,
-  slice_id TEXT
+  slice_id TEXT,
+  tokens_in INTEGER NOT NULL DEFAULT 0,
+  tokens_out INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS steps_wi ON steps(workitem_id, id);
 CREATE TABLE IF NOT EXISTS slices (
@@ -148,10 +151,12 @@ export class Store {
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
     // Bestehende Datenbanken aus dem Stand vor den Slices: Spalte nachruesten (Fehler = Spalte gibt es schon).
-    try {
-      this.db.exec("ALTER TABLE steps ADD COLUMN slice_id TEXT");
-    } catch {
-      // schon vorhanden
+    for (const col of ["slice_id TEXT", "tokens_in INTEGER NOT NULL DEFAULT 0", "tokens_out INTEGER NOT NULL DEFAULT 0"]) {
+      try {
+        this.db.exec(`ALTER TABLE steps ADD COLUMN ${col}`);
+      } catch {
+        // schon vorhanden
+      }
     }
   }
 
@@ -249,11 +254,11 @@ export class Store {
   // ---- Story-Schritte ------------------------------------------------------------
 
   /** Ein Rollen-Aufruf eines Auftrags: Rolle, Modell, Ergebnis, betroffene Dateien, Zeitraum. */
-  recordStep(s: Omit<Step, "id">): Step {
+  recordStep(s: Omit<Step, "id" | "tokens"> & { tokens?: Step["tokens"] }): Step {
     const row = this.db
       .query(
-        `INSERT INTO steps (workitem_id, role, model, ok, reason, files, started_at, ended_at, slice_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO steps (workitem_id, role, model, ok, reason, files, started_at, ended_at, slice_id, tokens_in, tokens_out)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         s.workItemId,
@@ -265,8 +270,10 @@ export class Store {
         s.startedAt,
         s.endedAt,
         s.sliceId ?? null,
+        s.tokens?.input ?? 0,
+        s.tokens?.output ?? 0,
       ) as { id: number };
-    return { ...s, id: row.id };
+    return { ...s, id: row.id, tokens: s.tokens ?? { input: 0, output: 0 } };
   }
 
   /** Schritte eines Auftrags, ohne Angabe alle (neueste zuletzt). */
@@ -287,6 +294,7 @@ export class Store {
       startedAt: r.started_at as string,
       endedAt: r.ended_at as string,
       ...(r.slice_id ? { sliceId: r.slice_id as string } : {}),
+      tokens: { input: r.tokens_in as number, output: r.tokens_out as number },
     }));
   }
 

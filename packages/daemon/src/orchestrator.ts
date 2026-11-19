@@ -537,6 +537,9 @@ export function createOrchestrator(opts: OrchestratorOptions) {
   ): Promise<{ ok: true; output: z.infer<(typeof ROLE_OUTPUTS)[R]> } | { ok: false; feedback: string }> {
     const startedAt = new Date().toISOString();
     const res = await runRoleInner(wi, role, model, prompt, roleOpts);
+    // Tokens stehen im run.finished-Event dieses Aufrufs (der letzte passende Eintrag).
+    const fin = store.events({ traceId: wi.id, type: "run.finished" }).filter((e) => (e.data as { role?: string }).role === role).pop();
+    const tokens = (fin?.data as { tokens?: { input: number; output: number } } | undefined)?.tokens;
     const files = res.ok ? stepFiles(res.output) : [];
     store.recordStep({
       workItemId: wi.id,
@@ -548,6 +551,7 @@ export function createOrchestrator(opts: OrchestratorOptions) {
       startedAt,
       endedAt: new Date().toISOString(),
       ...(roleOpts.slice ? { sliceId: roleOpts.slice } : {}),
+      ...(tokens ? { tokens } : {}),
     });
     return res;
   }
