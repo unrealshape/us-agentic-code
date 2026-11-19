@@ -159,6 +159,18 @@ describe("Dashboard (Abnahme)", () => {
     expect(html).toContain("opus");
   });
 
+  test("die alten Bereiche zeigen dieselbe Seitenleiste wie das Dashboard", async () => {
+    const store = seeded();
+    const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });
+    for (const path of ["/inbox", "/wall", "/metrics", "/knowledge"]) {
+      const html = await (await app.request(path)).text();
+      expect(html).toContain('<aside class="side">');
+      expect(html).toContain('href="/dashboard"');
+      expect(html).toContain('href="/dashboard?view=tokens"');
+      expect(html).not.toContain('<header class="top">');
+    }
+  });
+
   test("/ leitet automatisch zum Dashboard weiter, die Inbox liegt unter /inbox", async () => {
     const store = seeded();
     const app = createApp(store, { home: tempHome(), pluginRoot: REPO_ROOT });

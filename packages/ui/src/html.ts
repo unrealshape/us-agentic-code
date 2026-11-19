@@ -67,13 +67,29 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 @media (max-width:640px){header.top{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 12px}main{padding:14px 12px 48px}}
 `;
 
+/** Seitenleiste wie im Dashboard: dieselben Bereiche in derselben Reihenfolge. */
 const NAV: [string, string][] = [
   ["/dashboard", "Dashboard"],
   ["/inbox", "Inbox"],
   ["/wall", "Agent-Wand"],
   ["/metrics", "Metriken"],
   ["/knowledge", "Wissen"],
+  ["/dashboard?view=tokens", "Token-Metriken"],
+  ["/dashboard?view=sessions", "Sessions"],
+  ["/dashboard?view=diagnose", "Diagnose"],
 ];
+
+const SHELL_CSS = `
+.shell{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
+aside.side{background:var(--panel);border-right:1px solid var(--line);padding:20px 14px;position:sticky;top:0;height:100vh;overflow:auto}
+aside.side .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;font-size:13px;margin:0 6px 22px}
+aside.side .logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#a66bff,#33d1e6);display:inline-block}
+aside.side a{display:block;color:var(--text);text-decoration:none;padding:9px 10px;border-radius:8px;font-size:13.5px}
+aside.side a:hover{background:var(--panel2)}
+aside.side h2{margin:20px 8px 8px}
+aside.side .notify{margin:14px 8px 0}
+@media (max-width:760px){.shell{grid-template-columns:1fr}aside.side{position:static;height:auto}}
+`;
 
 /**
  * Vollstaendige Seite: Navigation, Manifest, `palette.js` und optional das Token fuer
@@ -81,14 +97,18 @@ const NAV: [string, string][] = [
  */
 export function page(title: string, body: string, opts: { token?: string } = {}): string {
   const token = opts.token !== undefined ? `<meta name="usac-token" content="${esc(opts.token)}">` : "";
-  const nav = NAV.map(([href, label]) => `<a href="${href}">${esc(label)}</a>`).join("");
+  const side =
+    `<aside class="side"><div class="brand"><span class="logo"></span>usac</div>` +
+    `<h2>Arbeitsbereich</h2>` +
+    NAV.map(([href, label]) => `<a href="${href}">${esc(label)}</a>`).join("") +
+    `<button id="notify-enable" type="button" class="notify">Benachrichtigungen</button></aside>`;
   return (
     `<!doctype html><html lang="de"><head><meta charset="utf-8">` +
     `<meta name="viewport" content="width=device-width, initial-scale=1">` +
     `<title>${esc(title)}</title>` +
-    `<meta name="color-scheme" content="dark">${token}<style>${STYLE}</style>` +
+    `<meta name="color-scheme" content="dark">${token}<style>${STYLE}${SHELL_CSS}</style>` +
     `<link rel="manifest" href="/manifest.webmanifest">` +
     `<script src="/palette.js" defer></script><script type="module" src="/notify.js"></script>` +
-    `</head><body><header class="top"><span class="brand">usac</span><nav aria-label="Hauptnavigation">${nav}</nav><button id="notify-enable" type="button" class="notify">Benachrichtigungen</button></header><main>${body}</main></body></html>`
+    `</head><body><div class="shell">${side}<main>${body}</main></div></body></html>`
   );
 }
