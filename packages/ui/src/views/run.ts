@@ -16,5 +16,5 @@ export function runHtml(store: Store, id: string): string {
   const rows = events.map((e) => `<li>${esc(e.ts)} ${esc(e.type)} (${esc(e.actor)}) ${esc(JSON.stringify(e.data))}</li>`).join("");
   const enc = encodeURIComponent(id);
   const links = `<p><a href="/runs/${enc}/pipeline">Pipeline</a> · <a href="/runs/${enc}/review">Review</a></p>`;
-  return page(`Run ${id}`, `<h1>Run ${esc(id)}</h1>${links}${warn}<ol>${rows}</ol>`);
+  return page(`Run ${id}`, `<h1>Run ${esc(id)}</h1>${links}${warn}<div class="card"><ol class="events">${rows}</ol></div>`);
 }
