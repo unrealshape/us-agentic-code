@@ -62,6 +62,8 @@ a:focus-visible,button:focus-visible{outline:2px solid var(--run);outline-offset
 ol.events{list-style:none;padding:0;margin:0;font:13px ui-monospace,Consolas,monospace}
 ol.events li{padding:6px 0;border-bottom:1px solid var(--line);color:var(--text)}
 ol.events li:last-child{border-bottom:0}
+input,select,textarea{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--run);outline-offset:2px}
 @media (max-width:640px){header.top{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 12px}main{padding:14px 12px 48px}}
 `;
 
